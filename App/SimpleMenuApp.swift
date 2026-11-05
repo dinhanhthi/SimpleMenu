@@ -95,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 600, height: 420)
-            window.setContentSize(NSSize(width: 640, height: 560))
+            window.setContentSize(NSSize(width: 860, height: 560))
             if !window.setFrameUsingName("MainWindow") { window.center() }
             window.setFrameAutosaveName("MainWindow")
             window.delegate = self

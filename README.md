@@ -13,11 +13,10 @@ I really dislike how long the menu bar items on macOS can get, and how often the
 ## Features
 
 - Three sections per app: **Visible**, **Hidden** and **Always hidden**. System items (Clock, Wi-Fi, Battery, Control Center, ...) always stay.
-- A click on the SimpleMenu logo peeks: the Hidden apps show in the real menu bar, with live values, and hide again after a delay or a click elsewhere.
+- A click on the SimpleMenu logo peeks: the Hidden apps show in the real menu bar, with live values, and hide again after a delay or, unless turned off, a click elsewhere.
 - Option-click (or a hotkey) opens a dropdown that lists the Hidden and Always hidden apps. A row opens that item's real menu.
-- Drag-and-drop layout in Settings > Menu Bar Layout, applied at once.
+- Drag-and-drop layout in Settings > Layout, applied at once.
 - Optional global hotkeys for Peek and Dropdown.
-- Optional last-seen snapshots of hidden items in the dropdown (Screen Recording).
 - Optional on-device Apple Intelligence suggestions for the layout, which you accept one by one.
 
 ## Requirements
@@ -28,8 +27,7 @@ I really dislike how long the menu bar items on macOS can get, and how often the
 ## Permissions
 
 - **Accessibility** (required): SimpleMenu reads the menu bar items through Accessibility to list them, and posts the one click that opens an item from the dropdown.
-- **Screen Recording** (optional, off by default): only for the "Menu bar snapshots" in the dropdown. Turn it on in Settings > Permissions. macOS may ask again periodically, and a new grant may need a relaunch of SimpleMenu.
-- **Apple Intelligence** (optional, off by default): "Suggest with Apple Intelligence" in Settings > AI runs the on-device model only. Nothing leaves the Mac, and a suggestion never applies on its own: you click Accept.
+- **Apple Intelligence** (optional, off by default): "Suggest with Apple Intelligence" in Settings > AI runs the on-device model only, and only when you click "Suggest". Nothing leaves the Mac, and a suggestion never applies on its own: you click Accept.
 
 ## Private API
 
@@ -37,10 +35,10 @@ SimpleMenu hides items with a private macOS menu bar restriction (the assessment
 
 ## Usage
 
-- **Peek:** click the logo. The Hidden apps show until "Re-hide after" (Settings > General: 3, 5, 10 or 20 s, default 5), a click elsewhere, or another click on the logo. Click a peeked item to use it as usual; the bar re-hides once its menu closes. Always hidden apps do not show in a peek.
-- **Dropdown:** Option-click the logo. It lists the running Hidden and Always hidden apps; click a row to open that item. With "Menu bar snapshots" on, a row shows the item's last-seen image ("seen N min ago"): Hidden items are captured during a peek, Always hidden ones only when opened.
+- **Peek:** click the logo. The Hidden apps show until "Re-hide after" (Settings > General: 3, 5, 10 or 20 s, default 5), a click elsewhere (unless "Hide on outside click" is off in Settings > General), or another click on the logo. Click a peeked item to use it as usual; the bar re-hides once its menu closes. Always hidden apps do not show in a peek.
+- **Dropdown:** Option-click the logo. It lists the running Hidden and Always hidden apps; click a row to open that item.
 - **Menu:** right-click or Control-click the logo for "Settings…", "Check for Updates…" and "Quit SimpleMenu".
-- **Layout:** Settings > Menu Bar Layout has one column per section. Drag an app between the columns. Hiding is per app: all of an app's items move together.
+- **Layout:** Settings > Layout has one column per section. Drag an app between the columns. Hiding is per app: all of an app's items move together.
 - **New apps:** the first time SimpleMenu sees an app's menu bar items, the app goes to "New apps go to" (Settings > General, default Visible).
 - **Hotkeys:** record "Peek" and "Dropdown" in Settings > General. They have no defaults, so they never clash with another app's shortcuts.
 

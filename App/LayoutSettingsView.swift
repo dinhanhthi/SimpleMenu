@@ -1,4 +1,4 @@
-// The Menu Bar Layout section: one column per bar section, app cards dragged between them.
+// The Layout section: one column per bar section, app cards dragged between them.
 import AppKit
 import SwiftUI
 

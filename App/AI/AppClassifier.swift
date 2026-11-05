@@ -31,8 +31,8 @@ struct Suggestion: Sendable {
 
 /// Opt-in Apple Foundation Models suggestions (on-device only): one model call per app, cached by bundle ID.
 ///
-/// Never runs on its own and never applies anything: suggestions apply only through the Settings Accept button,
-/// and the `AISuggestions` toggle gates any automatic run.
+/// Never runs on its own and never applies anything: it runs on the Settings "Suggest" button (while the
+/// `AISuggestions` switch is on), and suggestions apply only through the Accept button.
 @MainActor
 @Observable
 final class AppClassifier {
@@ -81,20 +81,26 @@ final class AppClassifier {
             .sorted { $0.bundleID < $1.bundleID }
     }
 
-    /// Classifies each app not cached yet, one at a time. Does nothing when the model is unavailable or a run is
-    /// in progress, and stops once the `AISuggestions` switch is off, unless `ignoreSetting` (DEBUG `classify`).
-    /// A refused or guardrail-blocked app is logged and not asked again this session.
-    func suggest(_ apps: [ClassifierInput], ignoreSetting: Bool = false) async {
+    /// Classifies each app not cached yet, one at a time; `refresh` (the Settings button) asks about every app
+    /// again, replacing its suggestion as each answer arrives. Does nothing when the model is unavailable or a run
+    /// is in progress, and stops once the `AISuggestions` switch is off, unless `ignoreSetting` (DEBUG `classify`).
+    /// A refused or guardrail-blocked app is logged and not asked again until the next `refresh`.
+    func suggest(_ apps: [ClassifierInput], refresh: Bool = false, ignoreSetting: Bool = false) async {
         guard unavailableReason == nil, !isRunning else { return }
         isRunning = true
         defer { isRunning = false }
-        for app in apps where suggestions[app.bundleID] == nil && !failed.contains(app.bundleID) {
+        if refresh { failed = [] }
+        let pending = apps.filter { refresh || (suggestions[$0.bundleID] == nil && !failed.contains($0.bundleID)) }
+        for app in pending {
             if !ignoreSetting && !UserDefaults.standard.bool(forKey: Self.settingKey) { break }
             do {
                 suggestions[app.bundleID] = try await Self.classify(app)
             } catch {
                 switch error as? LanguageModelError {
-                case .refusal, .guardrailViolation: failed.insert(app.bundleID)
+                case .refusal, .guardrailViolation:
+                    failed.insert(app.bundleID)
+                    // A refused re-ask drops the earlier answer, so no stale Accept row stays.
+                    if refresh { suggestions[app.bundleID] = nil }
                 default: break
                 }
                 Self.logger.error("""

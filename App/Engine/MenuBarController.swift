@@ -39,6 +39,8 @@ final class MenuBarController {
     static let newAppSectionKey = "NewAppSection"
     /// UserDefaults key of the peek re-hide delay in seconds. Settings use `@AppStorage` on it.
     static let rehideDelayKey = "RehideDelay"
+    /// UserDefaults key of whether a click elsewhere ends a peek. Settings use `@AppStorage` on it.
+    static let collapseOnOutsideClickKey = "CollapseOnOutsideClick"
 
     /// The section new apps get, default visible.
     static var newAppSection: BarSection {
@@ -49,6 +51,12 @@ final class MenuBarController {
     static var rehideDelay: TimeInterval {
         let value = UserDefaults.standard.double(forKey: rehideDelayKey)
         return value > 0 ? value : 5
+    }
+
+    /// Whether a click elsewhere ends a peek, default on. Off, a peek ends on the re-hide timer or a click on
+    /// SimpleMenu only; read on every click.
+    static var collapsesOnOutsideClick: Bool {
+        UserDefaults.standard.object(forKey: collapseOnOutsideClickKey) as? Bool ?? true
     }
 
     private(set) var mode: BarMode = .collapsed
@@ -64,8 +72,6 @@ final class MenuBarController {
     private(set) var knownApps: [String: KnownApp] = [:]
     /// Why hiding is off (private API unavailable or failing), or nil. While set, the bar stays fully expanded.
     private(set) var hidingUnavailableReason: String?
-    /// Opt-in snapshots of Hidden items (at peek) and opened items, for the dropdown.
-    @ObservationIgnored let capture = MenuBarCapture()
     /// Opt-in on-device suggestions for the layout. Never run by the engine itself.
     @ObservationIgnored let classifier = AppClassifier()
 
@@ -170,8 +176,8 @@ final class MenuBarController {
         activeAllowList = nil
     }
 
-    /// Collapsed: peeks (shows hidden apps until `RehideDelay`, a click elsewhere, or the peeked item's menu
-    /// closing). Peek or open: collapses. The mode flips at once; the rescan for fresh frames follows.
+    /// Collapsed: peeks (shows hidden apps until `RehideDelay`, a click elsewhere unless "Hide on outside click"
+    /// is off, or the peeked item's menu closing). Peek or open: collapses. The mode flips at once; the rescan for fresh frames follows.
     func togglePeek() {
         guard mode == .collapsed else {
             collapse()
@@ -230,7 +236,6 @@ final class MenuBarController {
                 self.collapse()
                 return
             }
-            self.captureSnapshots([item])
             let fresh = ContinuousClock.now - start
             let baseline = await Task.detached { Set(Self.onScreenWindows().map(\.id)) }.value
             guard !Task.isCancelled, self.mode == .open(bundleID) else { return }
@@ -472,10 +477,6 @@ final class MenuBarController {
         #endif
         if mode == .peek, peekScanStarted, !peekFramesReady {
             peekFramesReady = true
-            // Always-hidden apps stay restricted in a peek, so they are captured only when opened.
-            captureSnapshots(items.filter {
-                layout.sections[$0.bundleID] == .hidden && !staleBundleIDs.contains($0.bundleID)
-            })
             if let click = pendingPeekClick {
                 pendingPeekClick = nil
                 peekClick(at: click.point, baseline: click.baseline)
@@ -530,26 +531,6 @@ final class MenuBarController {
         return KnownApp(bundleID: bundleID, name: bundleID, icon: workspace.icon(for: .applicationBundle))
     }
 
-    // MARK: - Snapshots
-
-    /// Opt-in (`CaptureSnapshots`, default off, read on every call): captures those of `items` that are allowed now
-    /// and in a menu bar strip, in the background. `items` must have fresh frames. Never awaited, so it never delays
-    /// a click.
-    private func captureSnapshots(_ items: [MenuBarItem]) {
-        guard UserDefaults.standard.bool(forKey: MenuBarCapture.settingKey) else {
-            #if DEBUG
-            Self.logger.notice("capture: skipped, \(MenuBarCapture.settingKey, privacy: .public) is off")
-            #endif
-            return
-        }
-        let strips = Self.menuBarStrips()
-        let laidOut = items.filter { item in
-            !isRestricted(item.bundleID) && isInMenuBarStrip(item.frame, strips: strips)
-        }
-        guard !laidOut.isEmpty else { return }
-        Task { await capture.capture(laidOut) }
-    }
-
     // MARK: - Peek and open
 
     private func installMouseMonitor() {
@@ -578,7 +559,7 @@ final class MenuBarController {
                 }
                 return
             }
-            guard let item = peekedItem(at: point) else { return collapse() }
+            guard let item = peekedItem(at: point) else { return outsidePeekClick() }
             openPeeked(item, baseline: Set(Self.onScreenWindows().map(\.id)))
         case .open:
             guard let target = openTarget else { return collapse() }
@@ -595,10 +576,15 @@ final class MenuBarController {
     }
 
     /// In peek: a click on a peeked item keeps the peek list and switches to the `.open` close rules
-    /// (no re-apply, so the neighbours do not vanish and shift the item while its menu opens). Elsewhere: collapse.
+    /// (no re-apply, so the neighbours do not vanish and shift the item while its menu opens). Elsewhere: `outsidePeekClick()`.
     private func peekClick(at point: CGPoint, baseline: Set<CGWindowID>) {
-        guard let item = peekedItem(at: point) else { return collapse() }
+        guard let item = peekedItem(at: point) else { return outsidePeekClick() }
         openPeeked(item, baseline: baseline)
+    }
+
+    /// A click in peek that hit no peeked item: collapses unless "Hide on outside click" is off.
+    private func outsidePeekClick() {
+        if Self.collapsesOnOutsideClick { collapse() }
     }
 
     private func openPeeked(_ item: MenuBarItem, baseline: Set<CGWindowID>) {

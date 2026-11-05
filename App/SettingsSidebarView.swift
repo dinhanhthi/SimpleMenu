@@ -16,7 +16,7 @@ enum SettingsSection: CaseIterable, Identifiable {
 
     var label: (title: String, icon: String) {
         switch self {
-        case .layout: ("Menu Bar Layout", "menubar.rectangle")
+        case .layout: ("Layout", "menubar.rectangle")
         case .general: ("General", "gearshape")
         case .permissions: ("Permissions", "hand.raised")
         case .ai: ("AI", "sparkles")
@@ -31,6 +31,8 @@ struct SettingsSidebarView: View {
     @AppStorage(AppearanceMode.storageKey) private var appearance = AppearanceMode.defaultMode
     /// Read by `MenuBarController` at the next peek; the default matches its fallback.
     @AppStorage(MenuBarController.rehideDelayKey) private var rehideDelay: Double = 5
+    /// Read by `MenuBarController` on every click in a peek; the default matches its fallback.
+    @AppStorage(MenuBarController.collapseOnOutsideClickKey) private var collapseOnOutsideClick = true
     /// Read by `MenuBarController` at the next scan; the default matches its fallback.
     @AppStorage(MenuBarController.newAppSectionKey) private var newAppSection: BarSection = .visible
     /// Sections opened so far: kept alive like TabView's tabs, so a section keeps its state (and its scroll) when
@@ -50,7 +52,7 @@ struct SettingsSidebarView: View {
             // On the card, not a sidebar material of its own.
             .scrollContentBackground(.hidden)
             .focused($sidebarFocused)
-            .frame(width: 200)
+            .frame(width: 150)
             // A raised card like the toolbar's capsules, instead of a divider beside the sections.
             .modifier(GlassCard(cornerRadius: 20, raised: true))
             // Level with the form's first section (its -16 margin cancels the grouped inset), close under the title bar.
@@ -114,6 +116,15 @@ struct SettingsSidebarView: View {
                     } label: {
                         Text("Re-hide after")
                         Text("How long a click on SimpleMenu shows the hidden items.")
+                    }
+                    LabeledContent {
+                        Toggle("Hide on outside click", isOn: $collapseOnOutsideClick)
+                            .toggleStyle(CompactSwitch())
+                            .labelsHidden()
+                    } label: {
+                        Text("Hide on outside click")
+                        Text("A click elsewhere hides the items again. Off, they stay until \"Re-hide after\" or "
+                            + "another click on SimpleMenu.")
                     }
                     LabeledContent {
                         CapsuleTabs(selection: $newAppSection, tabs: BarSection.allCases,
@@ -208,8 +219,7 @@ private struct PermissionsSection: View {
                         .foregroundStyle(trusted ? .green : .orange)
                 } label: {
                     Text("Accessibility")
-                    Text("SimpleMenu reads the menu bar items through Accessibility to list them and to open them. "
-                        + "Screen Recording is optional.")
+                    Text("SimpleMenu reads the menu bar items through Accessibility to list them and to open them.")
                 }
                 LabeledContent("System Settings") {
                     HStack(spacing: 8) {
@@ -219,9 +229,6 @@ private struct PermissionsSection: View {
                     }
                     .buttonStyle(RowTextButtonStyle(formRow: true))
                 }
-            }
-            Section {
-                ScreenRecordingRow()
             }
             if let reason = menuBar?.hidingUnavailableReason {
                 Section {
@@ -238,60 +245,16 @@ private struct PermissionsSection: View {
     }
 }
 
-/// The opt-in Screen Recording snapshots (`CaptureSnapshots`): a switch, the grant status and a note. Turning it on
-/// asks for access when it is not granted yet; the status is re-read when the app comes back from System Settings.
-private struct ScreenRecordingRow: View {
-    @Environment(MenuBarController.self) private var menuBar: MenuBarController?
-    @AppStorage(MenuBarCapture.settingKey) private var enabled = false
-    @State private var granted = MenuBarCapture.isGranted
-
-    var body: some View {
-        LabeledContent {
-            HStack(spacing: 10) {
-                Label(granted ? "Granted" : "Not granted",
-                      systemImage: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(granted ? .green : .orange)
-                Toggle("Menu bar snapshots", isOn: isOn)
-                    .toggleStyle(CompactSwitch())
-                    .labelsHidden()
-            }
-        } label: {
-            Text("Menu bar snapshots")
-            Text("Optional: shows a last-seen image of each hidden item in the dropdown, which needs Screen "
-                + "Recording. macOS may ask again periodically, and a new grant may need a relaunch of SimpleMenu "
-                + "to take effect. Change it in System Settings > Privacy & Security > Screen & System Audio "
-                + "Recording.")
-        }
-        .onAppear(perform: sync)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in sync() }
-    }
-
-    /// Stores the choice; turning it on without a grant asks for one (the system prompt does not block), turning it
-    /// off drops the cached images.
-    private var isOn: Binding<Bool> {
-        Binding(get: { enabled }, set: { on in
-            enabled = on
-            if !on { menuBar?.capture.clear() }
-            if on && !MenuBarCapture.isGranted { MenuBarCapture.requestAccess() }
-            sync()
-        })
-    }
-
-    private func sync() {
-        granted = MenuBarCapture.isGranted
-    }
-}
-
 /// Opt-in on-device suggestions (`AISuggestions`): the switch, the model's availability, and one row per app the
-/// model would move, with an Accept button. Nothing applies on its own, and no model call is made while the switch
-/// is off or the model is unavailable.
+/// model would move, with an Accept button. The model runs only on a click on "Suggest" (it can take a lot of
+/// memory), never on opening the section; nothing applies on its own.
 private struct AISection: View {
     @Environment(MenuBarController.self) private var menuBar: MenuBarController?
     @AppStorage(AppClassifier.settingKey) private var enabled = false
     /// Not observable (the model's availability is read on demand): re-read on appear, on app activation and
-    /// before each run.
+    /// before each run. Reading it does not load the model.
     @State private var unavailableReason: String?
-    /// False until `run()` first read the availability, so no "Available" state shows before the check.
+    /// False until `checkAvailability()` first ran, so no "Available" state shows before the check.
     @State private var checked = false
 
     var body: some View {
@@ -313,11 +276,9 @@ private struct AISection: View {
                 suggestionsSection(menuBar)
             }
         }
-        .onChange(of: enabled, initial: true) { run() }
-        // Apps arrive with the first scan: classify them once they are known.
-        .onChange(of: menuBar?.knownApps.count) { run() }
+        .onChange(of: enabled, initial: true) { checkAvailability() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            run()
+            checkAvailability()
         }
     }
 
@@ -346,6 +307,18 @@ private struct AISection: View {
         let classifier = menuBar.classifier
         let pending = pendingSuggestions(menuBar)
         Section("Suggestions") {
+            LabeledContent {
+                if classifier.isRunning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Suggest") { run() }
+                        .buttonStyle(RowTextButtonStyle(formRow: true))
+                        .disabled(menuBar.knownApps.isEmpty)
+                }
+            } label: {
+                Text(classifier.isRunning ? "Asking the on-device model..." : "Ask the model")
+                Text("Asks the on-device model about every app SimpleMenu knows. It never runs on its own.")
+            }
             ForEach(pending, id: \.bundleID) { row in
                 LabeledContent {
                     Button("Accept") {
@@ -370,18 +343,15 @@ private struct AISection: View {
                     }
                 }
             }
-            if classifier.isRunning {
-                LabeledContent {
-                    ProgressView().controlSize(.small)
-                } label: {
-                    Text("Asking the on-device model...")
+            // While running, the progress shows in the button's row.
+            if !classifier.isRunning {
+                if classifier.suggestions.isEmpty {
+                    Text(menuBar.knownApps.isEmpty ? "No suggestions yet." : "No suggestions yet. Click Suggest.")
+                        .foregroundStyle(.secondary)
+                } else if pending.isEmpty {
+                    Text("No suggestions: every app is already where the model would put it.")
+                        .foregroundStyle(.secondary)
                 }
-            } else if classifier.suggestions.isEmpty {
-                Text("No suggestions yet.")
-                    .foregroundStyle(.secondary)
-            } else if pending.isEmpty {
-                Text("No suggestions: every app is already where the model would put it.")
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -410,18 +380,22 @@ private struct AISection: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    /// Classifies the apps not cached yet, only while the switch is on and the model is available. The model
-    /// runs off the main thread; `suggest` returns at once when a run is already in progress.
-    private func run() {
-        guard enabled else { return }
-        guard let menuBar else { return }
+    /// Reads whether the model can run, without running it.
+    private func checkAvailability() {
+        guard enabled, let menuBar else { return }
         unavailableReason = menuBar.classifier.unavailableReason
         checked = true
-        guard unavailableReason == nil else { return }
+    }
+
+    /// The "Suggest" button: asks the model about every known app again, only while the switch is on and the model
+    /// is available. The model runs off the main thread; `suggest` returns at once when a run is in progress.
+    private func run() {
+        checkAvailability()
+        guard enabled, unavailableReason == nil, let menuBar else { return }
         let inputs = AppClassifier.inputs(items: menuBar.items, knownApps: menuBar.knownApps)
         guard !inputs.isEmpty else { return }
         let classifier = menuBar.classifier
-        Task { await classifier.suggest(inputs) }
+        Task { await classifier.suggest(inputs, refresh: true) }
     }
 }
 
