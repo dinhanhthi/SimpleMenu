@@ -2,23 +2,26 @@ import AppKit
 import Observation
 
 /// SimpleMenu's own menu bar item, the logo. Left click peeks (or collapses), Option-click opens the dropdown,
-/// right-click or Control-click opens SimpleMenu's menu (Settings…, Quit). The logo stays the same; while the bar
+/// right-click or Control-click opens SimpleMenu's menu (Settings…, Check for Updates…, Quit). The logo stays the same; while the bar
 /// peeks or an item is open, the button stays highlighted.
 @MainActor
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSMenuItemValidation {
     private let menuBar: MenuBarController
+    private let updater: Updater
     private let onSettings: () -> Void
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
 
-    init(menuBar: MenuBarController, onSettings: @escaping () -> Void) {
+    init(menuBar: MenuBarController, updater: Updater, onSettings: @escaping () -> Void) {
         self.menuBar = menuBar
+        self.updater = updater
         self.onSettings = onSettings
         // Variable length: a square item (about 22 pt) would clip the 25 pt wide logo.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         statusItem.autosaveName = "SimpleMenu"
         menu.addItem(item("Settings…", #selector(openSettings)))
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdates)))
         menu.addItem(.separator())
         menu.addItem(item("Quit SimpleMenu", #selector(quit)))
         guard let button = statusItem.button else { return }
@@ -132,6 +135,12 @@ final class StatusItemController: NSObject {
         return item
     }
 
+    /// Disabled while the updater is off (no `SUPublicEDKey` yet).
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(checkForUpdates) ? updater.canCheckForUpdates : true
+    }
+
     @objc private func openSettings() { onSettings() }
+    @objc private func checkForUpdates() { updater.checkForUpdates() }
     @objc private func quit() { NSApp.terminate(nil) }
 }

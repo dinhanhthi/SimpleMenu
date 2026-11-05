@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 #
-# ship.sh - End-to-end local release: build -> sign -> notarize -> GitHub Release.
+# ship.sh - End-to-end local release: build -> sign -> notarize -> GitHub Release -> appcast.
 #
 # Run this AFTER the version-bump commit (scripts/bump-version.sh + CHANGELOG.md) is pushed
-# to main. It chains scripts/build-and-notarize.sh and scripts/publish-release.sh with no
-# interactive prompts. Before building it requires: branch main, HEAD == origin/main (only
-# pushed commits ship), a clean tree of tracked files, gh authenticated, a non-empty `## [X.Y.Z]`
-# CHANGELOG.md section and no existing tag vX.Y.Z (the bump check).
+# to main. It chains scripts/build-and-notarize.sh, scripts/publish-release.sh and
+# scripts/publish-appcast.sh with no interactive prompts. Before building it requires: branch
+# main, HEAD == origin/main (only pushed commits ship), a clean tree of tracked files, gh
+# authenticated, a non-empty `## [X.Y.Z]` CHANGELOG.md section and no existing tag vX.Y.Z (the
+# bump check).
 #
-# Prereqs (one-time - details in the build-and-notarize.sh / publish-release.sh headers):
+# Prereqs (one-time - docs/RELEASING.md section 0, details in each script's header):
 #   - "Developer ID Application" cert of team TEAM_ID in the login Keychain
-#   - TEAM_ID (scaffold.py --team, or export TEAM_ID=<id>)
+#   - TEAM_ID (default 86H6CNLN4C, or export TEAM_ID=<id>)
 #   - notarytool credential profile (default "simplemenu-notary")
-#   - Xcode 26+ selected and xcodegen installed
+#   - Sparkle EdDSA key (generate_keys --account SimpleMenu) + SUPublicEDKey in App/Info.plist
+#   - Xcode 27+ selected and xcodegen installed
 #   - gh CLI authenticated, origin = github.com/<GH_REPO> (default dinhanhthi/SimpleMenu)
 #
 # Usage:
@@ -84,7 +86,7 @@ echo "========================================"
 echo
 
 # Step 1 - Build, sign, notarize, DMG (Keychain prompt -> Always Allow)
-echo "==> Step 1/2: build + notarize"
+echo "==> Step 1/3: build + notarize"
 scripts/build-and-notarize.sh
 
 if [[ "$(git rev-parse HEAD)" != "$release_sha" || -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -93,11 +95,16 @@ if [[ "$(git rev-parse HEAD)" != "$release_sha" || -n "$(git status --porcelain 
 fi
 
 # Step 2 - Tag + GitHub Release (zip + DMG uploaded)
-echo "==> Step 2/2: tag + GitHub Release"
+echo "==> Step 2/3: tag + GitHub Release"
 scripts/publish-release.sh --yes "$ZIP"
+
+# Step 3 - Generate + commit + push the appcast
+echo "==> Step 3/3: appcast"
+scripts/publish-appcast.sh "$ZIP"
 
 echo
 echo "========================================"
 echo "  SimpleMenu v$VERSION shipped!"
 echo "  GitHub : https://github.com/$GH_REPO/releases/tag/v$VERSION"
+echo "  Appcast: https://raw.githubusercontent.com/$GH_REPO/main/appcast.xml"
 echo "========================================"

@@ -8,6 +8,10 @@ packages:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     # KeyboardShortcuts 3.1.0, pinned by commit (git ls-remote ... refs/tags/3.1.0^{}; annotated tag, peeled).
     revision: 772133d9dbe800fdac0473226822994c5c162c58
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    # Sparkle 2.10.1, pinned by commit (git ls-remote ... refs/tags/2.10.1; lightweight tag, no ^{}).
+    revision: ab7d71291238df6e0492143b120c9b696a35f603
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -33,10 +37,12 @@ targets:
         buildPhase: resources
     dependencies:
       - package: KeyboardShortcuts
+      - package: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "com.math2it.simplemenu"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: App/Info.plist
         INFOPLIST_KEY_LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         INFOPLIST_KEY_CFBundleDisplayName: "SimpleMenu"
         MARKETING_VERSION: 0.1.0

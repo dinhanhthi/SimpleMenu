@@ -27,7 +27,7 @@ final class WindowState {
 /// Owns the Settings window, its navigation and the main menu for the app lifetime. No window at launch: the app
 /// lives in the menu bar, with a Dock icon only while Settings is open.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     /// The selected section; kept across window closes, so a menu can open a section before the window exists.
     let navigation = Navigation()
     let windowState = WindowState()
@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private(set) var accessibility: AccessibilityPermission?
     /// The hiding engine, started at launch and stopped (full bar back) on quit.
     let menuBar = MenuBarController()
+    /// Sparkle; stays off until `SUPublicEDKey` is set.
+    let updater = Updater()
 
     #if DEBUG
     /// Keeps the debug command observer alive for the app lifetime.
@@ -54,8 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         #if DEBUG
         debugCommands = DebugCommands(controller: menuBar)
         #endif
-        statusItemController = StatusItemController(menuBar: menuBar,
+        statusItemController = StatusItemController(menuBar: menuBar, updater: updater,
                                                     onSettings: { [weak self] in self?.showSettings() })
+        updater.start()
         Hotkeys.register(menuBar: menuBar)
         // Without Accessibility the app cannot list the menu bar: show why and how to grant it.
         if !accessibility.isTrusted { showSettings(section: .permissions) }
@@ -146,10 +149,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         windowState.isVisible = window.occlusionState.contains(.visible)
     }
 
-    /// App menu (About, Settings, Hide, Quit), Edit and Window menus: without them text fields lose copy and paste.
+    @objc private func checkForUpdates() { updater.checkForUpdates() }
+
+    /// Disabled while the updater is off (no `SUPublicEDKey` yet).
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        menuItem.action == #selector(checkForUpdates) ? updater.canCheckForUpdates : true
+    }
+
+    /// App menu (About, Check for Updates, Settings, Hide, Quit), Edit and Window menus: without them text fields lose copy and paste.
     private func makeMainMenu() -> NSMenu {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About SimpleMenu", action: #selector(showAbout), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+            .target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings as () -> Void),
                         keyEquivalent: ",").target = self

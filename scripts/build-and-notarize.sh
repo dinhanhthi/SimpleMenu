@@ -5,22 +5,25 @@
 # Releases are built locally only (there is no CI release workflow).
 #
 # Produces, under release/export/:
-#   - SimpleMenu-<version>.zip   notarized + stapled
+#   - SimpleMenu-<version>.zip   notarized + stapled -> Sparkle auto-update asset
 #   - SimpleMenu-<version>.dmg   notarized + stapled -> manual-download asset
-# Then hand the .zip to scripts/publish-release.sh to tag + create the GitHub Release
-# (scripts/ship.sh runs the whole chain).
+# Then hand the .zip to scripts/publish-release.sh to tag + create the GitHub Release, and to
+# scripts/publish-appcast.sh for the Sparkle appcast (scripts/ship.sh runs the whole chain).
 #
-# project.yml signs ad-hoc for local builds. This script signs the Release archive with
-# Developer ID on the command line (CODE_SIGN_STYLE/CODE_SIGN_IDENTITY/DEVELOPMENT_TEAM), then
-# exports it with the developer-id method, so project.yml needs no signing change.
+# project.yml signs the app target with Manual "Developer ID Application" (Debug too, so the
+# Accessibility grant survives rebuilds). This script still passes the signing settings on the
+# command line (CODE_SIGN_STYLE/CODE_SIGN_IDENTITY/DEVELOPMENT_TEAM) to pin the team, exports with
+# the developer-id method, then re-signs Sparkle's nested helpers with the same identity.
 #
-# Prereqs (one-time):
+# Prereqs (one-time - see docs/RELEASING.md section 0):
 #   - "Developer ID Application" cert of team TEAM_ID in the login Keychain
 #     (Xcode > Settings > Accounts > Manage Certificates)
-#   - TEAM_ID: set by scaffold.py --team, or export TEAM_ID=<10-char team id>
+#   - TEAM_ID: default 86H6CNLN4C, or export TEAM_ID=<10-char team id>
 #   - notarytool credential profile (default "simplemenu-notary"):
 #       xcrun notarytool store-credentials simplemenu-notary --apple-id <id> --team-id <TEAM_ID>
-#   - Xcode 26+ selected (the app uses the macOS 26 SDK) and xcodegen (brew install xcodegen)
+#   - Sparkle EdDSA public key pasted into SUPublicEDKey (App/Info.plist):
+#       generate_keys --account SimpleMenu
+#   - Xcode 27+ selected (the app uses the macOS 27 SDK) and xcodegen (brew install xcodegen)
 #
 # Notarization talks to Apple, so this needs network - "local" means your machine, not offline.
 #
@@ -36,6 +39,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 PROJECT="SimpleMenu.xcodeproj"
+INFO_PLIST="App/Info.plist"
 ARCHIVE="release/SimpleMenu.xcarchive"
 EXPORT_DIR="release/export"
 EXPORT_OPTIONS="release/ExportOptions.plist"
@@ -70,7 +74,7 @@ sorted_words() { tr ' ' '\n' <<<"$1" | grep . | sort | tr '\n' ' ' | sed 's/ $//
 # --- 0. Tools & prereqs (all before the slow archive) -----------------------
 [[ -n "$TEAM_ID" ]] \
   || { echo "error: TEAM_ID is empty - Developer ID signing needs your Apple team id." >&2
-       echo "       export TEAM_ID=<10-char team id>, or re-scaffold with scaffold.py --team <id>." >&2
+       echo "       export TEAM_ID=<10-char team id> (SimpleMenu's team is 86H6CNLN4C)." >&2
        exit 1; }
 [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] \
   || { echo "error: TEAM_ID '$TEAM_ID' is not a 10-character Apple team id" >&2; exit 1; }
@@ -79,15 +83,15 @@ sorted_words() { tr ' ' '\n' <<<"$1" | grep . | sort | tr '\n' ' ' | sed 's/ $//
 command -v xcodebuild >/dev/null || { echo "error: xcodebuild not found" >&2; exit 1; }
 command -v xcodegen >/dev/null \
   || { echo "error: xcodegen not found - brew install xcodegen" >&2; exit 1; }
-[[ -f project.yml ]] \
-  || { echo "error: project.yml not found - run from the SimpleMenu repo" >&2; exit 1; }
+[[ -f project.yml && -f "$INFO_PLIST" ]] \
+  || { echo "error: project.yml / $INFO_PLIST not found - run from the SimpleMenu repo" >&2; exit 1; }
 
-# Xcode 26+ is REQUIRED: the app calls macOS 26 APIs (behind #available), which older SDKs
+# Xcode 27+ is REQUIRED: the app targets macOS 27 and uses its SDK, which older Xcodes
 # do not have. Fail loudly instead of deep inside the archive log.
 XCODE_VER="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
 XCODE_MAJOR="${XCODE_VER%%.*}"
-if ! [[ "$XCODE_MAJOR" =~ ^[0-9]+$ ]] || (( XCODE_MAJOR < 26 )); then
-  echo "error: Xcode 26+ required to build SimpleMenu (have ${XCODE_VER:-unknown})." >&2
+if ! [[ "$XCODE_MAJOR" =~ ^[0-9]+$ ]] || (( XCODE_MAJOR < 27 )); then
+  echo "error: Xcode 27+ required to build SimpleMenu (have ${XCODE_VER:-unknown})." >&2
   echo "       sudo xcode-select -s /Applications/Xcode.app" >&2
   exit 1
 fi
@@ -110,6 +114,26 @@ elif [[ "$SIGN_COUNT" != 1 ]]; then
   exit 1
 fi
 SIGN_HASH="$SIGN_HASHES"
+
+# Sparkle refuses unsigned updates: an empty SUPublicEDKey would ship an app that can never
+# verify (and so never install) an update.
+ED_KEY="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST" 2>/dev/null | tr -d '[:space:]' || true)"
+[[ -n "$ED_KEY" ]] \
+  || { echo "error: SUPublicEDKey is empty in $INFO_PLIST - Sparkle could never verify an update." >&2
+       echo "       Run Sparkle's generate_keys --account SimpleMenu and paste the public key (docs/RELEASING.md section 0)." >&2
+       exit 1; }
+# Same gate as App/Updater.swift: the key must decode from base64 to exactly 32 bytes (Ed25519),
+# or the shipped app keeps its updater off.
+[[ "$(printf '%s' "$ED_KEY" | base64 -D 2>/dev/null | wc -c | tr -d ' ')" == 32 ]] \
+  || { echo "error: SUPublicEDKey in $INFO_PLIST is not a base64 32-byte EdDSA public key - the app would keep its updater off." >&2
+       echo "       Paste the exact output of generate_keys --account SimpleMenu -p (docs/RELEASING.md section 0)." >&2
+       exit 1; }
+
+FEED_URL="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$INFO_PLIST" 2>/dev/null | tr -d '[:space:]' || true)"
+[[ "$FEED_URL" == https://* ]] \
+  || { echo "error: SUFeedURL in $INFO_PLIST is '${FEED_URL:-unset}', expected an https:// URL." >&2
+       echo "       Point it at https://raw.githubusercontent.com/dinhanhthi/SimpleMenu/main/appcast.xml" >&2
+       exit 1; }
 
 xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
   || { echo "error: notarytool credential profile '$NOTARY_PROFILE' is missing or invalid." >&2
@@ -143,9 +167,9 @@ fi
 echo "==> Building SimpleMenu $VERSION ($ARCHS, team $TEAM_ID, notary profile: $NOTARY_PROFILE)"
 
 # --- 2. Archive (Developer ID) ---------------------------------------------
-# Default DerivedData (no -derivedDataPath), so Xcode reuses it. The signing overrides and ARCHS
-# go on the command line: project.yml stays ad-hoc for local builds. If you add SPM packages,
-# note that command-line settings apply to every target, packages included.
+# Default DerivedData (no -derivedDataPath), so Xcode reuses it (and publish-appcast.sh finds
+# Sparkle's generate_appcast there). The signing overrides and ARCHS go on the command line, so
+# they apply to every target, the SPM packages (Sparkle, KeyboardShortcuts) included.
 rm -rf "$ARCHIVE" "$EXPORT_DIR" "$EXPORT_OPTIONS"
 xcodebuild -project "$PROJECT" -scheme SimpleMenu \
   -configuration Release \
@@ -178,6 +202,30 @@ xcodebuild -exportArchive \
   -exportPath "$EXPORT_DIR"
 [[ -d "$APP" ]] || { echo "error: export did not produce $APP" >&2; exit 1; }
 
+# --- 3b. Re-sign Sparkle's nested helpers with Developer ID + secure timestamp ----
+# Sparkle's deeply nested code (Updater.app, Autoupdate, the two XPC services) can stay
+# ADHOC-signed with no secure timestamp, and notarization rejects exactly those 4. Sign
+# inside-out (nested code first -> framework -> outer app; touching nested code breaks every
+# seal above it). --preserve-metadata=entitlements keeps each helper's entitlements while adding
+# Developer ID + secure timestamp + hardened runtime. Resolve the version letter (Current -> e.g.
+# B) so a future Sparkle bump that changes it does not silently skip these paths; stop if it
+# cannot be read. Layout verified for Sparkle 2.10.1 (the pin in project.yml). The sanity gate
+# below then checks the final seal.
+SPK="$APP/Contents/Frameworks/Sparkle.framework"
+[[ -d "$SPK" ]] || { echo "error: Sparkle.framework missing from the app - it could never update" >&2; exit 1; }
+SPK_CURRENT="$(readlink "$SPK/Versions/Current" 2>/dev/null)" && [[ -n "$SPK_CURRENT" && -d "$SPK/Versions/$SPK_CURRENT" ]] \
+  || { echo "error: cannot resolve $SPK/Versions/Current - the Sparkle framework layout changed" >&2; exit 1; }
+SPKV="$SPK/Versions/$SPK_CURRENT"
+resign() { codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
+  --sign "$SIGN_HASH" "$1"; }
+resign "$SPKV/XPCServices/Downloader.xpc"
+resign "$SPKV/XPCServices/Installer.xpc"
+resign "$SPKV/Updater.app"
+resign "$SPKV/Autoupdate"
+resign "$SPK"        # re-seal the framework over the re-signed helpers
+resign "$APP"        # re-seal the outer app over the re-signed framework
+echo "==> Re-signed Sparkle nested helpers (Developer ID + timestamp)"
+
 # Sanity-gate the exported app before the (slow) notarization round-trip. Capture codesign
 # output into a var first: piping `codesign | grep -q` trips `set -o pipefail` - grep -q exits
 # on first match, SIGPIPEs codesign (exit 141), and the pipeline is wrongly seen as failed.
@@ -186,8 +234,9 @@ BUILT_ARCHS="$(lipo -archs "$BIN" 2>/dev/null || true)"
 [[ "$(sorted_words "$BUILT_ARCHS")" == "$(sorted_words "$ARCHS")" ]] \
   || { echo "error: app binary architectures are '${BUILT_ARCHS:-unknown}', expected '$ARCHS'" >&2; exit 1; }
 SIGN_INFO="$(codesign -dvvv "$APP" 2>&1)"
-grep -q "Authority=$SIGN_ID" <<<"$SIGN_INFO" \
-  || { echo "error: exported app is not Developer ID signed" >&2; exit 1; }
+# SIGN_ID has no regex metacharacters and TEAM_ID is checked to be [A-Z0-9]{10} above.
+grep -qE "^Authority=$SIGN_ID: .*\($TEAM_ID\)$" <<<"$SIGN_INFO" \
+  || { echo "error: exported app is not Developer ID signed by team $TEAM_ID" >&2; exit 1; }
 grep -qx "TeamIdentifier=$TEAM_ID" <<<"$SIGN_INFO" \
   || { echo "error: exported app is not signed with team $TEAM_ID" >&2; exit 1; }
 grep -q "flags=.*runtime" <<<"$SIGN_INFO" \
@@ -205,6 +254,9 @@ BUILT_MIN_OS="$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP
 BUILT_MINOS="$(vtool -show-build "$BIN" 2>/dev/null | awk '/minos/ {print $2}' | sort -u || true)"
 [[ "$BUILT_MINOS" == "$MIN_MACOS" ]] \
   || { echo "error: app binary minos is '${BUILT_MINOS:-unknown}', expected '$MIN_MACOS'" >&2; exit 1; }
+BUILT_ED_KEY="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$APP/Contents/Info.plist" 2>/dev/null | tr -d '[:space:]' || true)"
+[[ -n "$BUILT_ED_KEY" ]] \
+  || { echo "error: built app has an empty SUPublicEDKey - the Info.plist merge dropped it" >&2; exit 1; }
 echo "==> Exported Developer-ID-signed $ARCHS app (minos $MIN_MACOS)"
 
 # --- 4. Notarize + staple the app, then ship-zip it ------------------------
@@ -244,3 +296,4 @@ echo "  zip : $EXPORT_DIR/SimpleMenu-$VERSION.zip"
 echo "  dmg : $EXPORT_DIR/SimpleMenu-$VERSION.dmg"
 echo
 echo "Next: scripts/publish-release.sh $EXPORT_DIR/SimpleMenu-$VERSION.zip"
+echo "      then scripts/publish-appcast.sh $EXPORT_DIR/SimpleMenu-$VERSION.zip"
