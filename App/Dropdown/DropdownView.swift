@@ -1,15 +1,17 @@
-// The dropdown's content: the running Hidden and Always-hidden apps with their status items, and a Settings button.
+// The dropdown's content: the running Hidden and Always-hidden apps with their status items, and a Settings button;
+// or, as a bar, one icon per item.
 import AppKit
 import SwiftUI
 
 /// Reads the controller's cached `items`, `layout`, `knownApps` only (no AX), so it renders at once; a
-/// rescan updates the rows in place. Reports its height through `onHeight` so the panel can keep its top edge pinned.
+/// rescan updates the rows in place. Reports its size through `onSize` so the panel can keep its top edge pinned.
 struct DropdownView: View {
     let controller: MenuBarController
+    let style: DropdownStyle
     /// Bundle ID and item index of a clicked row.
     let onOpen: (String, Int) -> Void
     let onSettings: () -> Void
-    let onHeight: (CGFloat) -> Void
+    let onSize: (CGSize) -> Void
 
     /// The list scrolls past this height.
     private static let maxListHeight: CGFloat = 480
@@ -18,6 +20,13 @@ struct DropdownView: View {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let groups = [BarSection.hidden, .alwaysHidden].map { ($0, entries(in: $0, running: running)) }
             .filter { !$0.1.isEmpty }
+        switch style {
+        case .dropdown: list(groups)
+        case .bar: BarCard(groups: groups, onOpen: onOpen, onSize: onSize)
+        }
+    }
+
+    private func list(_ groups: [(BarSection, [AppEntry])]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if groups.isEmpty {
                 EmptyState()
@@ -44,7 +53,7 @@ struct DropdownView: View {
         .frame(width: 300)
         .modifier(GlassCard(cornerRadius: 12))
         .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight($0) }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { onSize($0) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -136,7 +145,7 @@ private struct AppRows: View {
     }
 
     /// AXTitle, else AXDescription (or its fallbacks).
-    private static func text(_ item: MenuBarItem) -> String? {
+    fileprivate static func text(_ item: MenuBarItem) -> String? {
         item.title ?? item.detail
     }
 }
@@ -181,6 +190,98 @@ private struct EmptyState: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 12)
         .padding(.vertical, 20)
+    }
+}
+
+/// The bar: one row of icons, Hidden then Always hidden with a divider between, scrolling sideways past the panel's
+/// width cap. Reports the row's own width, not the clipped one, so the panel grows back when there is room; the
+/// height is the card's, which a legacy scroller adds to.
+private struct BarCard: View {
+    let groups: [(BarSection, [AppEntry])]
+    let onOpen: (String, Int) -> Void
+    let onSize: (CGSize) -> Void
+
+    @State private var contentWidth: CGFloat = 0
+    @State private var height: CGFloat = 0
+
+    var body: some View {
+        Group {
+            if groups.isEmpty {
+                Text("Nothing is hidden")
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, DropdownRowStyle.padding)
+                    .frame(height: BarIcon.height)
+                    .padding(6)
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { report(width: $0) }
+            } else {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 2) {
+                        ForEach(groups, id: \.0) { group in
+                            if group.0 != groups.first?.0 {
+                                Divider()
+                                    .frame(height: AppLabel.iconSize)
+                                    .padding(.horizontal, 4)
+                            }
+                            ForEach(group.1) { app in
+                                BarAppIcons(app: app, onOpen: onOpen)
+                            }
+                        }
+                    }
+                    .padding(6)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { report(width: $0) }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            }
+        }
+        .modifier(GlassCard(cornerRadius: 12))
+        .fixedSize(horizontal: false, vertical: true)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { report(height: $0) }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func report(width: CGFloat? = nil, height: CGFloat? = nil) {
+        if let width { contentWidth = width }
+        if let height { self.height = height }
+        onSize(CGSize(width: contentWidth, height: self.height))
+    }
+}
+
+/// An app's icons in the bar: one per cached item, or one opening its first item if it has none, like `AppRows`.
+private struct BarAppIcons: View {
+    let app: AppEntry
+    let onOpen: (String, Int) -> Void
+
+    var body: some View {
+        if app.items.count <= 1 {
+            BarIcon(app: app, label: app.name) { onOpen(app.bundleID, app.items.first?.index ?? 0) }
+        } else {
+            ForEach(app.items, id: \.rowID) { item in
+                let text = AppRows.text(item) ?? "Item \(item.index + 1)"
+                BarIcon(app: app, label: "\(app.name): \(text)") { onOpen(app.bundleID, item.index) }
+            }
+        }
+    }
+}
+
+/// An app icon button; its tooltip and VoiceOver label name the app (and the item, for an app with several).
+private struct BarIcon: View {
+    /// The icon and `DropdownRowStyle`'s vertical padding.
+    static let height = AppLabel.iconSize + 10
+
+    let app: AppEntry
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(nsImage: app.icon)
+                .resizable()
+                .frame(width: AppLabel.iconSize, height: AppLabel.iconSize)
+        }
+        .buttonStyle(DropdownRowStyle())
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 

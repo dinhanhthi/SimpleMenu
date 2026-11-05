@@ -6,7 +6,7 @@ All notable changes to SimpleMenu are listed here. `scripts/publish-release.sh` 
 
 - Hide menu bar items per app in three sections: Visible, Hidden and Always hidden. System items always stay.
 - Peek: a click on the SimpleMenu logo shows the Hidden apps in the menu bar until "Re-hide after" (default 5 s) or a click elsewhere; "Hide on outside click" (default on) can keep it shown on a click elsewhere.
-- Dropdown: an Option-click lists the Hidden and Always hidden apps, and a row opens that item's real menu.
+- Bar and dropdown: an Option-click shows the Hidden and Always hidden apps, and a click opens that item's real menu. "Option-click opens" picks a row of icons under the menu bar (default) or a list.
 - Drag-and-drop layout in Settings > Layout, applied at once, and a setting for where new apps go (default Visible).
 - Optional global hotkeys for Peek and Dropdown, with no defaults.
 - Optional on-device Apple Intelligence suggestions for the layout, run only from the "Suggest" button and applied only when you accept them.

@@ -41,6 +41,9 @@ final class MenuBarController {
     static let rehideDelayKey = "RehideDelay"
     /// UserDefaults key of whether a click elsewhere ends a peek. Settings use `@AppStorage` on it.
     static let collapseOnOutsideClickKey = "CollapseOnOutsideClick"
+    /// UserDefaults key of what an Option-click on SimpleMenu opens (a `DropdownStyle` raw value). Settings use
+    /// `@AppStorage` on it.
+    static let optionClickPanelKey = "OptionClickPanel"
 
     /// The section new apps get, default visible.
     static var newAppSection: BarSection {
@@ -57,6 +60,11 @@ final class MenuBarController {
     /// SimpleMenu only; read on every click.
     static var collapsesOnOutsideClick: Bool {
         UserDefaults.standard.object(forKey: collapseOnOutsideClickKey) as? Bool ?? true
+    }
+
+    /// What an Option-click on SimpleMenu and the Dropdown hotkey open, default the bar; read on every toggle.
+    static var optionClickPanel: DropdownStyle {
+        UserDefaults.standard.string(forKey: optionClickPanelKey).flatMap(DropdownStyle.init(rawValue:)) ?? .bar
     }
 
     private(set) var mode: BarMode = .collapsed
@@ -201,11 +209,11 @@ final class MenuBarController {
         }
     }
 
-    /// Opens item `index` of `bundleID` (a Hidden or Always-hidden app, from the dropdown): closes the dropdown,
-    /// allows that app on top of the collapsed list, waits for a fresh frame, then posts one real left click at the
-    /// item's centre, like the user's own click, puts the pointer back and follows the `.open` close rules. A click,
-    /// not AXPress: AXPress cannot open a SwiftUI `MenuBarExtra(.window)` item (measured on macOS 27), and a click
-    /// is what NSMenu and popover items get from the user too. Frames are polled only from `layoutDelay` on: a
+    /// Opens item `index` of `bundleID` (a Hidden or Always-hidden app, from the dropdown or the bar): closes the
+    /// panel, allows that app on top of the collapsed list, waits for a fresh frame, then posts one real left click at
+    /// the item's centre, like the user's own click, puts the pointer back and follows the `.open` close rules. A
+    /// click, not AXPress: AXPress cannot open a SwiftUI `MenuBarExtra(.window)` item (measured on macOS 27), and a
+    /// click is what NSMenu and popover items get from the user too. Frames are polled only from `layoutDelay` on: a
     /// hidden item's stale frame is stable and on-screen too. Collapses (and logs) if the item never gets a fresh
     /// frame. The click is posted only once the live gate holds (fresh AX reads of the item and of the other allowed
     /// apps' items, never cached frames); otherwise it logs and lets the open watch time out. The click lands inside
@@ -294,7 +302,8 @@ final class MenuBarController {
 
     var isDropdownVisible: Bool { dropdown?.isVisible ?? false }
 
-    /// Opens the dropdown under SimpleMenu's icon from the cached inventory (its rescan follows), or closes it.
+    /// Opens the dropdown or the bar (`optionClickPanel`) under SimpleMenu's icon from the cached inventory (its
+    /// rescan follows), or closes it.
     /// Opening or closing never changes `mode`: a peek or an open item stays as it is.
     func toggleDropdown() {
         if isDropdownVisible { return closeDropdown() }
@@ -306,7 +315,7 @@ final class MenuBarController {
         let panel = dropdown ?? DropdownPanel(controller: self, buttonFrame: { [weak self] in self?.dropdownAnchor?() },
                                                onSettings: dropdownOnSettings)
         dropdown = panel
-        panel.show(below: frame)
+        panel.show(below: frame, style: Self.optionClickPanel)
         #if DEBUG
         dropdownOpenedAt = start
         let elapsed = ContinuousClock.now - start

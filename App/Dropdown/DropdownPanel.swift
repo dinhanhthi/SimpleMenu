@@ -1,9 +1,23 @@
-// The dropdown: a borderless panel under SimpleMenu's status item that lists the hidden apps and their items.
+// The dropdown: a borderless panel under SimpleMenu's status item that lists the hidden apps and their items, as a
+// list or as a bar of icons.
 import AppKit
 import SwiftUI
 
+/// How the panel shows the hidden items: a vertical list with a Settings button, or one row of app icons.
+enum DropdownStyle: String, CaseIterable {
+    case dropdown, bar
+
+    var title: String {
+        switch self {
+        case .dropdown: "Dropdown"
+        case .bar: "Bar"
+        }
+    }
+}
+
 /// A non-activating pop-up panel showing `DropdownView`, its top edge pinned under the status item button. Esc, an
-/// outside click, losing key, a row and "Settings…" close it. Reused across shows: call `show(below:)` and `close()`.
+/// outside click, losing key, a row and "Settings…" close it. Reused across shows and styles: call
+/// `show(below:style:)` and `close()`.
 @MainActor
 final class DropdownPanel: NSPanel {
     private static let width: CGFloat = 300
@@ -17,8 +31,11 @@ final class DropdownPanel: NSPanel {
     private let onSettings: () -> Void
     private var hosting: NSHostingView<DropdownView>?
     private var outsideClickMonitor: Any?
-    /// The top-left corner the panel is pinned to while shown (bottom-left screen coordinates).
-    private var anchor: CGPoint?
+    /// The status button's window frame the panel is pinned under while shown (bottom-left screen coordinates).
+    private var anchor: NSRect?
+    /// The anchor screen's visible frame: the panel stays inside it, `margin` from its edges.
+    private var visibleFrame: NSRect = .zero
+    private var style: DropdownStyle = .dropdown
     /// The status button's live window frame: a click there is the toggle's, not an outside click. Read at click
     /// time, since the icon can move while the panel is open.
     private let buttonFrame: () -> NSRect?
@@ -41,12 +58,7 @@ final class DropdownPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        let view = DropdownView(
-            controller: controller,
-            onOpen: { [weak self] bundleID, index in self?.openItem(bundleID: bundleID, index: index) },
-            onSettings: { [weak self] in self?.openSettings() },
-            onHeight: { [weak self] height in self?.fit(height: height) })
-        let hosting = NSHostingView(rootView: view)
+        let hosting = NSHostingView(rootView: view(for: style))
         // Intrinsic size only: `fittingSize` measures the content, and the window never resizes itself (its frame
         // is set here, top edge pinned).
         hosting.sizingOptions = [.intrinsicContentSize]
@@ -61,15 +73,16 @@ final class DropdownPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     /// Shows the cached inventory at once under `buttonFrame` (the status item button's window frame, screen
-    /// coordinates), then starts a background rescan that updates the rows in place.
-    func show(below buttonFrame: NSRect) {
+    /// coordinates) in `style`, then starts a background rescan that updates the rows in place.
+    func show(below buttonFrame: NSRect, style: DropdownStyle) {
         let screen = NSScreen.screens.first { $0.frame.intersects(buttonFrame) } ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? buttonFrame
-        let x = min(max(buttonFrame.minX, visible.minX + Self.margin), visible.maxX - Self.width - Self.margin)
-        let top = min(buttonFrame.minY, visible.maxY) - Self.gap
-        anchor = CGPoint(x: x, y: top)
-        maxHeight = max(top - visible.minY - Self.margin, 0)
-        fit(height: hosting?.fittingSize.height ?? frame.height)
+        visibleFrame = screen?.visibleFrame ?? buttonFrame
+        anchor = buttonFrame
+        self.style = style
+        maxHeight = max(top(below: buttonFrame) - visibleFrame.minY - Self.margin, 0)
+        hosting?.rootView = view(for: style)
+        // Measured after the swap: before it, the size is the previous style's.
+        fit(size: hosting?.fittingSize ?? frame.size)
         makeKeyAndOrderFront(nil)
         installOutsideClickMonitor()
         controller.rescanInBackground()
@@ -99,11 +112,30 @@ final class DropdownPanel: NSPanel {
         super.sendEvent(event)
     }
 
-    /// Resizes to `height`, capped to the screen, keeping the top edge at `anchor`.
-    private func fit(height: CGFloat) {
-        guard let anchor, height > 0 else { return }
-        let fitted = min(height, maxHeight)
-        let target = NSRect(x: anchor.x, y: anchor.y - fitted, width: Self.width, height: fitted)
+    private func view(for style: DropdownStyle) -> DropdownView {
+        DropdownView(
+            controller: controller,
+            style: style,
+            onOpen: { [weak self] bundleID, index in self?.openItem(bundleID: bundleID, index: index) },
+            onSettings: { [weak self] in self?.openSettings() },
+            onSize: { [weak self] size in self?.fit(size: size) })
+    }
+
+    /// The panel's top edge: `gap` under the button, never above the visible frame.
+    private func top(below buttonFrame: NSRect) -> CGFloat {
+        min(buttonFrame.minY, visibleFrame.maxY) - Self.gap
+    }
+
+    /// Resizes to `size`, capped to the screen, keeping the top edge under `anchor`. x is recomputed on every fit,
+    /// so a bar that a rescan widens still ends at the button: the dropdown's left edge is at the button's left
+    /// edge, the bar's right edge at its right edge, both kept on screen.
+    private func fit(size: CGSize) {
+        guard let anchor, size.width > 0, size.height > 0 else { return }
+        let width = min(size.width, max(visibleFrame.width - 2 * Self.margin, 0))
+        let height = min(size.height, maxHeight)
+        let preferredX = style == .bar ? anchor.maxX - width : anchor.minX
+        let x = min(max(preferredX, visibleFrame.minX + Self.margin), visibleFrame.maxX - width - Self.margin)
+        let target = NSRect(x: x, y: top(below: anchor) - height, width: width, height: height)
         guard target != frame else { return }
         setFrame(target, display: true)
         invalidateShadow()

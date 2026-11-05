@@ -35,6 +35,8 @@ struct SettingsSidebarView: View {
     @AppStorage(MenuBarController.collapseOnOutsideClickKey) private var collapseOnOutsideClick = true
     /// Read by `MenuBarController` at the next scan; the default matches its fallback.
     @AppStorage(MenuBarController.newAppSectionKey) private var newAppSection: BarSection = .visible
+    /// Read by `MenuBarController` on every Option-click or Dropdown hotkey; the default matches its fallback.
+    @AppStorage(MenuBarController.optionClickPanelKey) private var optionClickPanel: DropdownStyle = .bar
     /// Sections opened so far: kept alive like TabView's tabs, so a section keeps its state (and its scroll) when
     /// the user comes back to it.
     @State private var opened: Set<SettingsSection> = []
@@ -134,6 +136,15 @@ struct SettingsSidebarView: View {
                         Text("New apps go to")
                         Text("Where an app's menu bar items go the first time SimpleMenu sees them.")
                     }
+                    LabeledContent {
+                        CapsuleTabs(selection: $optionClickPanel, tabs: DropdownStyle.allCases,
+                                    title: { Text($0.title) }, compact: true)
+                            .fixedSize()
+                    } label: {
+                        Text("Option-click opens")
+                        Text("What an Option-click on SimpleMenu and the Dropdown hotkey open: a row of icons under "
+                            + "the menu bar, or a list.")
+                    }
                 }
                 Section {
                     KeyboardShortcuts.Recorder(for: .peek) {
@@ -142,7 +153,7 @@ struct SettingsSidebarView: View {
                     }
                     KeyboardShortcuts.Recorder(for: .dropdown) {
                         Text("Dropdown")
-                        Text("Same as an Option-click on SimpleMenu: lists the hidden items.")
+                        Text("Same as an Option-click on SimpleMenu: opens the bar or the dropdown.")
                     }
                 }
             }
