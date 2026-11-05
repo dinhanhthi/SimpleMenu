@@ -1,19 +1,21 @@
 import AppKit
+import Observation
 
-/// SimpleMenu's own menu bar item, the logo. Left click peeks, Option-click opens the dropdown, right-click or
-/// Control-click opens SimpleMenu's menu (Settings…, Quit). The click actions are closures set by the app delegate.
+/// SimpleMenu's own menu bar item, the logo. Left click peeks (or collapses), Option-click opens the dropdown,
+/// right-click or Control-click opens SimpleMenu's menu (Settings…, Quit). The logo stays the same; while the bar
+/// peeks or an item is open, the button stays highlighted.
 @MainActor
 final class StatusItemController: NSObject {
-    /// Left click. A no-op until Phase 3.
-    var onPeek: () -> Void = {}
     /// Option-click. A no-op until Phase 4.
     var onDropdown: () -> Void = {}
 
+    private let menuBar: MenuBarController
     private let onSettings: () -> Void
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
 
-    init(onSettings: @escaping () -> Void) {
+    init(menuBar: MenuBarController, onSettings: @escaping () -> Void) {
+        self.menuBar = menuBar
         self.onSettings = onSettings
         // Variable length: a square item (about 22 pt) would clip the 25 pt wide logo.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -28,6 +30,25 @@ final class StatusItemController: NSObject {
         button.target = self
         button.action = #selector(clicked)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        observeMode()
+    }
+
+    /// One-shot tracking of the bar mode, re-registered on every change. `onChange` runs before the new value is
+    /// set, so the highlight is read on the next main-actor turn; that also lands after the button's own click
+    /// tracking, which would otherwise reset a highlight set inside the action.
+    private func observeMode() {
+        withObservationTracking {
+            _ = menuBar.mode
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.observeMode()
+                self?.updateHighlight()
+            }
+        }
+    }
+
+    private func updateHighlight() {
+        statusItem.button?.highlight(menuBar.mode != .collapsed)
     }
 
     /// The logo at 25×16 pt, full colour (not a template): `logo_object_gray` on a light menu bar,
@@ -66,7 +87,8 @@ final class StatusItemController: NSObject {
     }
 
     /// Runs on the mouse-up itself and does no work of its own: the button's press highlight is the immediate
-    /// reaction, and the menu opens in the same turn. Control-click arrives as a left mouse-up with `.control`.
+    /// reaction, and the menu opens in the same turn. `togglePeek()` flips the mode at once; its rescan follows
+    /// asynchronously. Control-click arrives as a left mouse-up with `.control`.
     @objc private func clicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
         let flags = event?.modifierFlags ?? []
@@ -75,16 +97,18 @@ final class StatusItemController: NSObject {
         } else if flags.contains(.option) {
             onDropdown()
         } else {
-            onPeek()
+            menuBar.togglePeek()
         }
     }
 
     /// Attaches the menu only while it is open: with `statusItem.menu` set, every click would open it and
     /// `clicked` would never run. `performClick` tracks the menu synchronously, so clearing it right after is safe.
+    /// The menu's tracking ends un-highlighted, so the peek or open highlight is put back.
     private func showMenu(from button: NSStatusBarButton) {
         statusItem.menu = menu
         button.performClick(nil)
         statusItem.menu = nil
+        updateHighlight()
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {

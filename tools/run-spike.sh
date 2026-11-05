@@ -7,10 +7,12 @@
 #                      [--double | --launch-helpers] [--block-args]
 #   (--launch-helpers: target com.math2it.simplemenu.spike.helper; Spike launches the helpers itself)
 #   tools/run-spike.sh press <bundleID> [--system-items <id,...>] [--open-hold <seconds>]
+#   tools/run-spike.sh post <peek|collapse|setSection <bundleID> <section>>   (drives a DEBUG SimpleMenu)
+#   tools/run-spike.sh build   (build and sign only, never launches; e.g. to zip Spike.app for a VM)
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <list|hide|press> [args]" >&2
+  echo "usage: $0 <list|hide|press|post|build> [args]" >&2
   exit 64
 fi
 CMD="$1"
@@ -82,6 +84,10 @@ EOF
   done
   cp -f "$BIN" "$BARE_BIN"
   codesign --force --options runtime --timestamp=none -s "$IDENTITY" -i com.math2it.simplemenu.spike.bare "$BARE_BIN"
+fi
+
+if [ "$CMD" = "build" ]; then
+  exit 0
 fi
 
 # 4. Launch as its own process (cwd is / under open, so the log path is absolute).

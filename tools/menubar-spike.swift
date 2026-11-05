@@ -6,6 +6,7 @@
 //              [--double | --launch-helpers] [--block-args] --out <log>
 //   Spike press <bundleID> [--system-items <n,n,...>] [--open-hold <seconds>] --out <log>
 //   Spike helper [--out <log>] [--t0 <epoch>]   (status item owner, launched by `hide --launch-helpers`)
+//   Spike post <cmd> [args] --out <log>   (posts SimpleMenu's DEBUG command notification; needs no Accessibility)
 //
 // Never links MenuBarClientCore: `hide` and `press` resolve it at runtime (dlopen + NSClassFromString).
 
@@ -1285,12 +1286,29 @@ if CommandLine.arguments.dropFirst().first == "helper" {
 
 let args = Arguments(CommandLine.arguments)
 guard let outPath = args.outPath else {
-    FileHandle.standardError.write(Data("usage: Spike <list|hide|press> [args] --out <path>\n".utf8))
+    FileHandle.standardError.write(Data("usage: Spike <list|hide|press|post> [args] --out <path>\n".utf8))
     exit(64)
 }
 log.open(path: outPath)
 log.line("Spike \(args.command ?? "-") \(args.rest.joined(separator: " "))")
 log.line("pid: \(getpid()), bundle: \(Bundle.main.bundleIdentifier ?? "-"), macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
+
+// `post` drives a DEBUG SimpleMenu (App/DebugCommands.swift). Before the trust gate: it uses no AX, so it must
+// neither need the grant nor show the Accessibility prompt.
+if args.command == "post" {
+    let cmd = args.rest.joined(separator: " ")
+    if cmd.isEmpty {
+        log.line("usage: Spike post <peek|collapse|setSection <bundleID> <section>> --out <log>")
+        finish(64)
+    }
+    DistributedNotificationCenter.default().postNotificationName(
+        Notification.Name("com.math2it.simplemenu.debug"), object: nil, userInfo: ["cmd": cmd],
+        deliverImmediately: true)
+    log.line("posted com.math2it.simplemenu.debug cmd=\"\(cmd)\"")
+    // Give the hand-off to distnoted a moment before exit.
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+    finish(0)
+}
 
 var trusted = AXIsProcessTrusted()
 log.line("AXIsProcessTrusted() == \(trusted)")
@@ -1323,7 +1341,7 @@ DispatchQueue.global(qos: .userInitiated).async {
         startPress(rest, apps: apps)  // finishes itself from its own timeline thread
         return
     default:
-        log.line("unknown command \"\(command)\"; usage: Spike <list|hide|press> [args] --out <path>")
+        log.line("unknown command \"\(command)\"; usage: Spike <list|hide|press|post> [args] --out <path>")
         status = 64
     }
     finish(status)

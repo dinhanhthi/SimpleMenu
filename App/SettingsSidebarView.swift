@@ -26,6 +26,10 @@ struct SettingsSidebarView: View {
     /// The selected section, shared with the AppDelegate so a menu can open a section.
     @Bindable var navigation: Navigation
     @AppStorage(AppearanceMode.storageKey) private var appearance = AppearanceMode.defaultMode
+    /// Read by `MenuBarController` at the next peek; the default matches its fallback.
+    @AppStorage(MenuBarController.rehideDelayKey) private var rehideDelay: Double = 5
+    /// Read by `MenuBarController` at the next scan; the default matches its fallback.
+    @AppStorage(MenuBarController.newAppSectionKey) private var newAppSection: BarSection = .visible
     /// Sections opened so far: kept alive like TabView's tabs, so a section keeps its state (and its scroll) when
     /// the user comes back to it.
     @State private var opened: Set<SettingsSection> = []
@@ -97,6 +101,24 @@ struct SettingsSidebarView: View {
                     }
                     LaunchAtLoginRow()
                 }
+                Section {
+                    LabeledContent {
+                        CapsuleTabs(selection: $rehideDelay, tabs: [3, 5, 10, 20],
+                                    title: { Text("\(Int($0)) s") }, compact: true)
+                            .fixedSize()
+                    } label: {
+                        Text("Re-hide after")
+                        Text("How long a click on SimpleMenu shows the hidden items.")
+                    }
+                    LabeledContent {
+                        CapsuleTabs(selection: $newAppSection, tabs: BarSection.allCases,
+                                    title: { Text($0.title) }, compact: true)
+                            .fixedSize()
+                    } label: {
+                        Text("New apps go to")
+                        Text("Where an app's menu bar items go the first time SimpleMenu sees them.")
+                    }
+                }
             }
         case .permissions:
             PermissionsSection()
@@ -157,6 +179,7 @@ private struct LaunchAtLoginRow: View {
 /// The Accessibility status, why SimpleMenu needs it, and the buttons that ask for it.
 private struct PermissionsSection: View {
     @Environment(AccessibilityPermission.self) private var accessibility: AccessibilityPermission?
+    @Environment(MenuBarController.self) private var menuBar: MenuBarController?
 
     var body: some View {
         let trusted = accessibility?.isTrusted == true
@@ -180,6 +203,28 @@ private struct PermissionsSection: View {
                     .buttonStyle(RowTextButtonStyle(formRow: true))
                 }
             }
+            if let reason = menuBar?.hidingUnavailableReason {
+                Section {
+                    LabeledContent {
+                        Label("Unavailable", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    } label: {
+                        Text("Menu bar hiding")
+                        Text("The menu bar stays fully shown. \(reason)")
+                    }
+                }
+            }
+        }
+    }
+}
+
+extension BarSection {
+    /// The section's name in Settings.
+    var title: String {
+        switch self {
+        case .visible: "Visible"
+        case .hidden: "Hidden"
+        case .alwaysHidden: "Always hidden"
         }
     }
 }

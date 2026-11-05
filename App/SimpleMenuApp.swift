@@ -34,6 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Accessibility trust, shared by the app; created at launch and never prompts by itself.
     private(set) var accessibility: AccessibilityPermission?
+    /// The hiding engine, started at launch and stopped (full bar back) on quit.
+    let menuBar = MenuBarController()
+
+    #if DEBUG
+    /// Keeps the debug command observer alive for the app lifetime.
+    private var debugCommands: DebugCommands?
+    #endif
 
     private var window: NSWindow?
     private var statusItemController: StatusItemController?
@@ -41,10 +48,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppearanceMode.current.apply()
         NSApp.mainMenu = makeMainMenu()
-        accessibility = AccessibilityPermission()
-        statusItemController = StatusItemController(onSettings: { [weak self] in self?.showSettings() })
+        let accessibility = AccessibilityPermission()
+        self.accessibility = accessibility
+        menuBar.start(accessibility: accessibility)
+        #if DEBUG
+        debugCommands = DebugCommands(controller: menuBar)
+        #endif
+        statusItemController = StatusItemController(menuBar: menuBar,
+                                                    onSettings: { [weak self] in self?.showSettings() })
         // Without Accessibility the app cannot list the menu bar: show why and how to grant it.
-        if accessibility?.isTrusted == false { showSettings(section: .permissions) }
+        if !accessibility.isTrusted { showSettings(section: .permissions) }
+    }
+
+    /// Removes the restriction, so the full menu bar returns when SimpleMenu quits.
+    func applicationWillTerminate(_ notification: Notification) {
+        menuBar.stop()
     }
 
     /// Opening the app again (Finder, `open`, Spotlight) opens Settings.
@@ -56,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func showMainWindow() {
         if window == nil {
             let hosting = NSHostingController(rootView: MainView(navigation: navigation).environment(windowState)
-                .environment(accessibility))
+                .environment(accessibility).environment(menuBar))
             // The window owns its size, not the SwiftUI content.
             hosting.sizingOptions = []
             // The SwiftUI toolbar (the logo) becomes the window's toolbar, in the traffic-light row.
