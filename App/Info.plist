@@ -2,14 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Partial Info.plist: merged with the generated one (GENERATE_INFOPLIST_FILE=YES). Sparkle keys only. -->
-	<!-- The updater stays off unless SUPublicEDKey is a base64 32-byte EdDSA key (see Updater.swift, RELEASING.md §0). -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/dinhanhthi/SimpleMenu/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string></string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<string>PNXKF8DgVopSB9A+/cVXnVKOwgdMbR3q3EBFgokyO0c=</string>
 	<key>SUVerifyUpdateBeforeExtraction</key>
 	<true/>
 </dict>
