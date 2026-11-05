@@ -45,15 +45,20 @@ struct SettingsSidebarView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            List(selection: selection) {
+            // Own rows instead of a sidebar List: its selection is AppKit's rounded rectangle, not a capsule. The
+            // arrow keys still move the selection while the sidebar has focus.
+            VStack(alignment: .leading, spacing: 2) {
                 ForEach(SettingsSection.allCases) { row in
-                    Label(row.label.title, systemImage: row.label.icon).tag(row)
+                    SidebarRow(section: row, selected: row == navigation.section) { navigation.section = row }
                 }
+                Spacer(minLength: 0)
             }
-            .listStyle(.sidebar)
-            // On the card, not a sidebar material of its own.
-            .scrollContentBackground(.hidden)
+            .padding(10)
+            .focusable()
+            .focusEffectDisabled()
             .focused($sidebarFocused)
+            .onKeyPress(.upArrow) { moveSelection(by: -1) }
+            .onKeyPress(.downArrow) { moveSelection(by: 1) }
             .frame(width: 150)
             // A raised card like the toolbar's capsules, instead of a divider beside the sections.
             .modifier(GlassCard(cornerRadius: 20, raised: true))
@@ -84,9 +89,12 @@ struct SettingsSidebarView: View {
         .onChange(of: appearance) { _, mode in mode.apply() }
     }
 
-    /// Ignores deselection (a click in the empty sidebar): a section is always shown.
-    private var selection: Binding<SettingsSection?> {
-        Binding(get: { navigation.section }, set: { if let new = $0 { navigation.section = new } })
+    /// The previous or next section, stopping at the ends.
+    private func moveSelection(by offset: Int) -> KeyPress.Result {
+        let all = SettingsSection.allCases
+        guard let index = all.firstIndex(of: navigation.section) else { return .ignored }
+        navigation.section = all[min(max(index + offset, 0), all.count - 1)]
+        return .handled
     }
 
     /// A fade between sections; an instant switch under Reduce Motion.
@@ -212,6 +220,43 @@ private struct LaunchAtLoginRow: View {
 
     private func sync() {
         status = SMAppService.mainApp.status
+    }
+}
+
+/// A sidebar section row: the selected one on an accent capsule, the others lighter on hover. Switches on press.
+private struct SidebarRow: View {
+    let section: SettingsSection
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Label {
+                Text(section.label.title)
+            } icon: {
+                Image(systemName: section.label.icon)
+                    .foregroundStyle(selected ? Color.white : Color.secondary)
+                    // One width for every symbol, so the titles line up.
+                    .frame(width: 18)
+            }
+            .foregroundStyle(selected ? Color.white : Color.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background {
+                if selected {
+                    Capsule().fill(Color.accentColor)
+                } else if hovered {
+                    Capsule().fill(Palette.hoverFill)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(Motion.hover, value: hovered)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -432,6 +477,10 @@ private struct AboutSection: View {
             Text(AppInfo.name).font(.title2.weight(.semibold))
             Text("Version \(AppInfo.version)")
                 .foregroundStyle(.secondary)
+            // Markdown link: the author's name opens the website.
+            Text("Made by [Anh-Thi DINH](https://dinhanhthi.com)")
+            Link("github.com/dinhanhthi/SimpleMenu",
+                 destination: URL(string: "https://github.com/dinhanhthi/SimpleMenu")!)
             Text("Hides menu bar items with a private macOS API, which a system update may change.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
