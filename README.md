@@ -39,7 +39,7 @@ SimpleMenu hides items with a private macOS menu bar restriction (the assessment
 
 - **Peek:** click the logo. The Hidden apps show until "Re-hide after" (Settings > General: 3, 5, 10 or 20 s, default 5), a click elsewhere, or another click on the logo. Click a peeked item to use it as usual; the bar re-hides once its menu closes. Always hidden apps do not show in a peek.
 - **Dropdown:** Option-click the logo. It lists the running Hidden and Always hidden apps; click a row to open that item. With "Menu bar snapshots" on, a row shows the item's last-seen image ("seen N min ago"): Hidden items are captured during a peek, Always hidden ones only when opened.
-- **Menu:** right-click or Control-click the logo for "Settings…" and "Quit SimpleMenu".
+- **Menu:** right-click or Control-click the logo for "Settings…", "Check for Updates…" and "Quit SimpleMenu".
 - **Layout:** Settings > Menu Bar Layout has one column per section. Drag an app between the columns. Hiding is per app: all of an app's items move together.
 - **New apps:** the first time SimpleMenu sees an app's menu bar items, the app goes to "New apps go to" (Settings > General, default Visible).
 - **Hotkeys:** record "Peek" and "Dropdown" in Settings > General. They have no defaults, so they never clash with another app's shortcuts.

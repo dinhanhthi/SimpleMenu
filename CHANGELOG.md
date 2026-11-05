@@ -12,6 +12,7 @@ All notable changes to SimpleMenu are listed here. `scripts/publish-release.sh` 
 - Optional last-seen snapshots of hidden items in the dropdown (needs Screen Recording).
 - Optional on-device Apple Intelligence suggestions for the layout, applied only when you accept them.
 - Hiding turns itself off, with the reason in Settings > Permissions, when the private menu bar API is unavailable or SimpleMenu does not run from /Applications.
+- Updates through Sparkle: "Check for Updates…" in the logo menu and the app menu, plus scheduled checks.
 
 ## [0.1.0] - YYYY-MM-DD
 
