@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>SimpleMenu</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Thu, 05 Nov 2026 06:36:48 -0600</pubDate>
+            <sparkle:fullReleaseNotesLink>https://github.com/dinhanhthi/SimpleMenu/releases</sparkle:fullReleaseNotesLink>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>27.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/dinhanhthi/SimpleMenu/releases/download/v0.1.0/SimpleMenu-0.1.0.zip" length="3457635" type="application/octet-stream" sparkle:edSignature="vZ1C8i7Q4vZE/EOXGlTvLxhc+edeHeLfze4VUgSIiSPVHQUmSsNpSNaXJ/ogBnbAeQ6OgS0NsQw9J2jg6IExAQ=="/>
+        </item>
+    </channel>
+</rss>
