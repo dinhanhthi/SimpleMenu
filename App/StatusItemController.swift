@@ -6,9 +6,6 @@ import Observation
 /// peeks or an item is open, the button stays highlighted.
 @MainActor
 final class StatusItemController: NSObject {
-    /// Option-click. A no-op until Phase 4.
-    var onDropdown: () -> Void = {}
-
     private let menuBar: MenuBarController
     private let onSettings: () -> Void
     private let statusItem: NSStatusItem
@@ -31,6 +28,8 @@ final class StatusItemController: NSObject {
         button.action = #selector(clicked)
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         observeMode()
+        menuBar.configureDropdown(anchor: { [weak self] in self?.statusItem.button?.window?.frame },
+                                  onSettings: onSettings)
     }
 
     /// One-shot tracking of the bar mode, re-registered on every change. `onChange` runs before the new value is
@@ -88,17 +87,33 @@ final class StatusItemController: NSObject {
 
     /// Runs on the mouse-up itself and does no work of its own: the button's press highlight is the immediate
     /// reaction, and the menu opens in the same turn. `togglePeek()` flips the mode at once; its rescan follows
-    /// asynchronously. Control-click arrives as a left mouse-up with `.control`.
+    /// asynchronously. Control-click arrives as a left mouse-up with `.control`. The dropdown's outside-click monitor
+    /// and the peek monitor see clicks on this button but skip those inside its frame, so with the dropdown open a
+    /// click only closes it here (a menu click then opens the menu), and in peek or open a plain click collapses here.
     @objc private func clicked(_ sender: NSStatusBarButton) {
         let event = NSApp.currentEvent
-        let flags = event?.modifierFlags ?? []
-        if event?.type == .rightMouseUp || flags.contains(.control) {
+        // The live state too: on macOS 27 the status item's mouse-up came with no modifier flags while Option was
+        // held (measured in a VM).
+        let flags = (event?.modifierFlags ?? []).union(NSEvent.modifierFlags)
+        let menuClick = event?.type == .rightMouseUp || flags.contains(.control)
+        if menuBar.isDropdownVisible {
+            menuBar.closeDropdown()
+            if !menuClick { return restoreHighlight() }
+        }
+        if menuClick {
             showMenu(from: sender)
         } else if flags.contains(.option) {
-            onDropdown()
+            menuBar.toggleDropdown()
+            restoreHighlight()
         } else {
             menuBar.togglePeek()
         }
+    }
+
+    /// The dropdown leaves the mode unchanged, so no mode observer puts back the peek or open highlight that the
+    /// button's click tracking resets: re-apply it on the next turn, after the tracking.
+    private func restoreHighlight() {
+        Task { @MainActor in self.updateHighlight() }
     }
 
     /// Attaches the menu only while it is open: with `statusItem.menu` set, every click would open it and

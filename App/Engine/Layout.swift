@@ -1,6 +1,6 @@
 import Foundation
 
-// Pure layout model and allow-list computation (Foundation only).
+// Pure layout model, allow-list computation and the menu bar strip check (Foundation only).
 // Compiled into the app and directly into the hostless test bundle.
 
 enum BarSection: String, Codable, CaseIterable, Sendable {
@@ -79,4 +79,14 @@ func allowedBundleIDs(running: [String], layout: Layout, mode: BarMode, selfID: 
         allowed.insert(id)
     }
     return allowed.sorted()
+}
+
+/// True when `frame` (top-left global, like AX frames) is non-empty, at most `maxWidth` wide and inside one of
+/// `strips` (each display's menu bar, top-left global, tolerances included). AX frames are the owning app's own
+/// report, so a synthetic click is posted only on a frame that passes. No strips: false.
+func isInMenuBarStrip(_ frame: CGRect, strips: [CGRect], maxWidth: CGFloat = 400) -> Bool {
+    guard frame.width > 0, frame.height > 0, frame.width <= maxWidth else { return false }
+    return strips.contains { strip in
+        frame.minX >= strip.minX && frame.maxX <= strip.maxX && frame.minY >= strip.minY && frame.maxY <= strip.maxY
+    }
 }

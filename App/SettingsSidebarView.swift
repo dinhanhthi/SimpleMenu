@@ -1,6 +1,7 @@
 // The Settings page, sidebar layout: the sections in a raised card, the selected one's form on the right over the
 // window's glass; each change is saved at once.
 import AppKit
+import KeyboardShortcuts
 import ServiceManagement
 import SwiftUI
 
@@ -9,12 +10,13 @@ typealias SettingsRoot = SettingsSidebarView
 
 /// A sidebar section. Adding one: a case, its row in `label`, its form in `SettingsSidebarView.content`.
 enum SettingsSection: CaseIterable, Identifiable {
-    case general, permissions, about
+    case layout, general, permissions, about
 
     var id: Self { self }
 
     var label: (title: String, icon: String) {
         switch self {
+        case .layout: ("Menu Bar Layout", "menubar.rectangle")
         case .general: ("General", "gearshape")
         case .permissions: ("Permissions", "hand.raised")
         case .about: ("About", "info.circle")
@@ -60,8 +62,8 @@ struct SettingsSidebarView: View {
                         .formStyle(.grouped)
                         .scrollContentBackground(.hidden)
                         // Negative: cancels most of the grouped form's own top inset, so its first section starts
-                        // level with the sidebar card.
-                        .contentMargins(.top, -16, for: .scrollContent)
+                        // level with the sidebar card. The layout is no form: it pads itself.
+                        .contentMargins(.top, page == .layout ? 0 : -16, for: .scrollContent)
                         .opacity(selected ? 1 : 0)
                         // The leaving section fades out faster, so the two never show through each other.
                         .animation(switchAnimation(selected: selected), value: selected)
@@ -91,6 +93,8 @@ struct SettingsSidebarView: View {
     @ViewBuilder
     private func content(_ section: SettingsSection) -> some View {
         switch section {
+        case .layout:
+            LayoutSettingsView()
         case .general:
             Form {
                 Section {
@@ -117,6 +121,16 @@ struct SettingsSidebarView: View {
                     } label: {
                         Text("New apps go to")
                         Text("Where an app's menu bar items go the first time SimpleMenu sees them.")
+                    }
+                }
+                Section {
+                    KeyboardShortcuts.Recorder(for: .peek) {
+                        Text("Peek")
+                        Text("Same as a click on SimpleMenu: shows the hidden items, or hides them again.")
+                    }
+                    KeyboardShortcuts.Recorder(for: .dropdown) {
+                        Text("Dropdown")
+                        Text("Same as an Option-click on SimpleMenu: lists the hidden items.")
                     }
                 }
             }

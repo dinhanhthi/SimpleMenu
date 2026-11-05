@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         #endif
         statusItemController = StatusItemController(menuBar: menuBar,
                                                     onSettings: { [weak self] in self?.showSettings() })
+        Hotkeys.register(menuBar: menuBar)
         // Without Accessibility the app cannot list the menu bar: show why and how to grant it.
         if !accessibility.isTrusted { showSettings(section: .permissions) }
     }

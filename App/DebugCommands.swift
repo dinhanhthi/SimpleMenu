@@ -8,6 +8,8 @@ import os
 /// - `peek`: same as a left click on SimpleMenu, so it toggles (a second `peek` during a peek collapses)
 /// - `collapse`
 /// - `setSection <bundleID> <visible|hidden|alwaysHidden>`
+/// - `open <bundleID> <index>`: same as a dropdown row click on that item
+/// - `dropdown`: same as an Option-click on SimpleMenu, so it toggles (a second `dropdown` closes it)
 @MainActor
 final class DebugCommands: NSObject {
     static let notificationName = Notification.Name("com.math2it.simplemenu.debug")
@@ -44,6 +46,14 @@ final class DebugCommands: NSObject {
                 return
             }
             controller.setSection(section, for: words[1])
+        case "dropdown":
+            controller.toggleDropdown()
+        case "open":
+            guard words.count == 3, let index = Int(words[2]), index >= 0 else {
+                Self.logger.notice("usage: open <bundleID> <index>")
+                return
+            }
+            controller.open(bundleID: words[1], index: index)
         default:
             Self.logger.notice("unknown cmd=\"\(cmd, privacy: .public)\"")
             return

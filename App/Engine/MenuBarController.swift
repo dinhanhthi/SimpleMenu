@@ -16,8 +16,8 @@ struct KnownApp: Identifiable {
 /// The hiding engine: owns the menu bar restriction, the layout, the bar mode and the inventory.
 ///
 /// Call `start(accessibility:)` once at launch and `stop()` in `applicationWillTerminate`. Everything else is
-/// driven by `togglePeek()`, `collapse()` and `setSection(_:for:)`. AX runs only inside `MenuBarInventory.scan()`,
-/// off the main thread; the restriction calls themselves are synchronous and cheap.
+/// driven by `togglePeek()`, `open(bundleID:index:)`, `collapse()` and `setSection(_:for:)`. AX runs only inside
+/// `MenuBarInventory`, off the main thread; the restriction calls themselves are synchronous and cheap.
 ///
 /// Measured behaviour of assessment mode (spike 1.4) that this class works around:
 /// - While a restriction is active, every unlisted owner is hidden, and an app launched during the restriction
@@ -82,7 +82,19 @@ final class MenuBarController {
     @ObservationIgnored private var peekScanTask: Task<Void, Never>?
     @ObservationIgnored private var rehideTask: Task<Void, Never>?
     @ObservationIgnored private var openWatchTask: Task<Void, Never>?
+    /// `open(bundleID:index:)`: waits for the fresh frame, then clicks. Separate from `openWatchTask`, which
+    /// `beginOpen` cancels.
+    @ObservationIgnored private var openClickTask: Task<Void, Never>?
     @ObservationIgnored private var mouseMonitor: Any?
+    /// Created on the first open; `configureDropdown(anchor:onSettings:)` supplies what it needs.
+    @ObservationIgnored private var dropdown: DropdownPanel?
+    /// The status item button's window frame (screen coordinates), the dropdown's anchor.
+    @ObservationIgnored private var dropdownAnchor: (() -> NSRect?)?
+    @ObservationIgnored private var dropdownOnSettings: () -> Void = {}
+    #if DEBUG
+    /// The last dropdown open, until the next scan merges: logs trigger -> rescan done.
+    @ObservationIgnored private var dropdownOpenedAt: ContinuousClock.Instant?
+    #endif
     @ObservationIgnored private var workspaceObservers: [NSObjectProtocol] = []
 
     /// Set once the peek's layout delay has passed: scans started from then on read fresh frames.
@@ -106,7 +118,7 @@ final class MenuBarController {
         let baseline: Set<CGWindowID>
     }
 
-    /// The app whose item was pressed, with the on-screen windows from just before the press.
+    /// The app whose item was clicked, with the on-screen windows from just before the click.
     private struct OpenTarget {
         let bundleID: String
         let pid: pid_t
@@ -177,6 +189,136 @@ final class MenuBarController {
             self.peekScanStarted = true
             await self.rescan()
         }
+    }
+
+    /// Opens item `index` of `bundleID` (a Hidden or Always-hidden app, from the dropdown): closes the dropdown,
+    /// allows that app on top of the collapsed list, waits for a fresh frame, then posts one real left click at the
+    /// item's centre, like the user's own click, puts the pointer back and follows the `.open` close rules. A click,
+    /// not AXPress: AXPress cannot open a SwiftUI `MenuBarExtra(.window)` item (measured on macOS 27), and a click
+    /// is what NSMenu and popover items get from the user too. Frames are polled only from `layoutDelay` on: a
+    /// hidden item's stale frame is stable and on-screen too. Collapses (and logs) if the item never gets a fresh
+    /// frame. The click is posted only once the live gate holds (fresh AX reads of the item and of the other allowed
+    /// apps' items, never cached frames); otherwise it logs and lets the open watch time out. The click lands inside
+    /// `openTarget.itemFrame`, which `globalClick` ignores, so it is not taken for an outside click. The item's
+    /// frame must also lie in a menu bar strip: the app reports it itself, and a click elsewhere is never posted.
+    func open(bundleID: String, index: Int) {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty else {
+            Self.logger.error("open: \(bundleID, privacy: .public) is not running")
+            return
+        }
+        closeDropdown()
+        endPeekAndOpen()
+        mode = .open(bundleID)
+        apply()
+        installMouseMonitor()
+        let strips = Self.menuBarStrips()
+        openClickTask = Task { [weak self] in
+            // `start` is when the `apply()` that allowed the item returned.
+            let start = ContinuousClock.now
+            try? await Task.sleep(for: Self.layoutDelay)
+            guard !Task.isCancelled else { return }
+            let item = await MenuBarInventory.waitForFreshFrame(bundleID: bundleID, index: index, strips: strips)
+            guard !Task.isCancelled, let self, self.mode == .open(bundleID) else { return }
+            guard let item else {
+                Self.logger.error("""
+                    open: no fresh frame in the menu bar for \(bundleID, privacy: .public) #\(index, privacy: .public)
+                    """)
+                self.collapse()
+                return
+            }
+            let fresh = ContinuousClock.now - start
+            let baseline = await Task.detached { Set(Self.onScreenWindows().map(\.id)) }.value
+            guard !Task.isCancelled, self.mode == .open(bundleID) else { return }
+            self.beginOpen(item, baseline: baseline)
+            let reason = await self.clickBlockedReason(item, allowed: start, strips: strips)
+            // After a collapse the item keeps a stale frame that passes the gate: check the mode last, with no await
+            // before the click.
+            guard !Task.isCancelled, self.mode == .open(bundleID), self.openTarget?.itemFrame == item.frame else {
+                return
+            }
+            if let reason {
+                Self.logger.error("""
+                    open: no click on \(bundleID, privacy: .public) #\(index, privacy: .public): \
+                    \(reason, privacy: .public)
+                    """)
+                return
+            }
+            let clickStart = ContinuousClock.now
+            await MenuBarInventory.click(at: CGPoint(x: item.frame.midX, y: item.frame.midY))
+            #if DEBUG
+            let posted = ContinuousClock.now - clickStart
+            Self.logger.notice("""
+                open: clicked \(bundleID, privacy: .public) #\(index, privacy: .public): fresh frame after \
+                \(fresh, privacy: .public), click posted in \(posted, privacy: .public)
+                """)
+            #else
+            _ = (fresh, clickStart)
+            #endif
+        }
+    }
+
+    /// Why the live gate blocks a click on `item` now, or nil: the item must be allowed at least `layoutDelay`
+    /// ago (`allowed`), and `MenuBarInventory.notLaidOutReason` must pass on fresh AX reads of the item and of the
+    /// other allowed apps' items, never cached frames.
+    private func clickBlockedReason(_ item: MenuBarItem, allowed: ContinuousClock.Instant,
+                                    strips: [CGRect]) async -> String? {
+        // Holds by construction (layout delay, then the fresh-frame wait); kept explicit because an item is laid out
+        // only 87–211 ms after the activation (spike 1.4), and before that its frame is stale.
+        let sinceAllowed = ContinuousClock.now - allowed
+        if sinceAllowed < Self.layoutDelay { return "allowed only \(sinceAllowed) ago" }
+        // Only allowed apps (SimpleMenu included): restricted ones keep stale or phantom frames.
+        let others = NSWorkspace.shared.runningApplications.compactMap { app -> (pid: pid_t, bundleID: String)? in
+            guard let id = app.bundleIdentifier, app.processIdentifier != item.pid, !isRestricted(id) else {
+                return nil
+            }
+            return (app.processIdentifier, id)
+        }
+        return await MenuBarInventory.notLaidOutReason(item, others: others, strips: strips)
+    }
+
+    /// Set once by `StatusItemController`: the button's window frame to anchor under, and what "Settings…" runs.
+    func configureDropdown(anchor: @escaping () -> NSRect?, onSettings: @escaping () -> Void) {
+        dropdownAnchor = anchor
+        dropdownOnSettings = onSettings
+    }
+
+    var isDropdownVisible: Bool { dropdown?.isVisible ?? false }
+
+    /// Opens the dropdown under SimpleMenu's icon from the cached inventory (its rescan follows), or closes it.
+    /// Opening or closing never changes `mode`: a peek or an open item stays as it is.
+    func toggleDropdown() {
+        if isDropdownVisible { return closeDropdown() }
+        let start = ContinuousClock.now
+        guard let frame = dropdownAnchor?() else {
+            Self.logger.error("dropdown: no status item to anchor under")
+            return
+        }
+        let panel = dropdown ?? DropdownPanel(controller: self, buttonFrame: { [weak self] in self?.dropdownAnchor?() },
+                                               onSettings: dropdownOnSettings)
+        dropdown = panel
+        panel.show(below: frame)
+        #if DEBUG
+        dropdownOpenedAt = start
+        let elapsed = ContinuousClock.now - start
+        Self.logger.notice("""
+            dropdown: visible \(panel.isVisible, privacy: .public) after \(elapsed, privacy: .public) \
+            with \(self.items.count, privacy: .public) cached items
+            """)
+        #else
+        _ = start
+        #endif
+    }
+
+    /// Closes the dropdown panel, if shown (before an item opens, a second toggle, a click on SimpleMenu).
+    func closeDropdown() {
+        guard isDropdownVisible else { return }
+        dropdown?.close()
+    }
+
+    /// Starts a rescan off the main thread; `items` and `knownApps` update when it ends. For the dropdown, which
+    /// shows the cached inventory first.
+    func rescanInBackground() {
+        Task { await rescan() }
     }
 
     /// Back to the collapsed layout; ends any peek or open.
@@ -316,6 +458,13 @@ final class MenuBarController {
         _ = start
         #endif
         merge(scanned)
+        #if DEBUG
+        if let opened = dropdownOpenedAt {
+            dropdownOpenedAt = nil
+            let elapsed = ContinuousClock.now - opened
+            Self.logger.notice("dropdown: rescan done after \(elapsed, privacy: .public)")
+        }
+        #endif
         if mode == .peek, peekScanStarted, !peekFramesReady {
             peekFramesReady = true
             if let click = pendingPeekClick {
@@ -383,8 +532,11 @@ final class MenuBarController {
         }
     }
 
-    /// Frame hit-tests only, plus one window-list read when it matters; no AX.
+    /// Frame hit-tests only, plus one window-list read when it matters; no AX. The monitor sees clicks on
+    /// SimpleMenu's own status button too (macOS 27): those are left to `StatusItemController.clicked`, which
+    /// collapses on mouse-up, so the mouse-down does not collapse and the mouse-up peek again.
     private func globalClick(at location: CGPoint) {
+        if let button = dropdownAnchor?(), button.contains(location) { return }
         let point = Self.topLeft(location)
         switch mode {
         case .collapsed:
@@ -436,9 +588,9 @@ final class MenuBarController {
 
     /// Enters `.open(bundleID)` without applying, and watches the item's windows: collapse once its menu or
     /// popover has closed, or after `openTimeout` if none appeared. No re-hide timer.
-    /// The caller picks the allow-list first: a peek click sets `openKeepsPeekList`; the dropdown path (4.2) leaves
+    /// The caller picks the allow-list first: a peek click sets `openKeepsPeekList`; `open(bundleID:index:)` leaves
     /// it false and calls `apply()` after setting the mode, so `collapsed + b` is used. `baseline` must be the
-    /// on-screen window IDs from before the press.
+    /// on-screen window IDs from before the click.
     private func beginOpen(_ item: MenuBarItem, baseline: Set<CGWindowID>) {
         let target = OpenTarget(bundleID: item.bundleID, pid: item.pid, itemFrame: item.frame, baseline: baseline)
         openTarget = target
@@ -453,8 +605,20 @@ final class MenuBarController {
                 guard !Task.isCancelled, let self, case .open = self.mode else { return }
                 let opened = windows.contains { $0.pid == target.pid && !target.baseline.contains($0.id) }
                 if opened {
+                    #if DEBUG
+                    if !sawWindow {
+                        let elapsed = ContinuousClock.now - start
+                        Self.logger.notice("""
+                            open: \(target.bundleID, privacy: .public) window on-screen after \(elapsed, privacy: .public)
+                            """)
+                    }
+                    #endif
                     sawWindow = true
                 } else if sawWindow || ContinuousClock.now - start >= Self.openTimeout {
+                    #if DEBUG
+                    let outcome = sawWindow ? "closed" : "no window within the timeout"
+                    Self.logger.notice("open: \(target.bundleID, privacy: .public) \(outcome, privacy: .public), collapsing")
+                    #endif
                     self.collapse()
                     return
                 }
@@ -466,9 +630,11 @@ final class MenuBarController {
         rehideTask?.cancel()
         peekScanTask?.cancel()
         openWatchTask?.cancel()
+        openClickTask?.cancel()
         rehideTask = nil
         peekScanTask = nil
         openWatchTask = nil
+        openClickTask = nil
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         mouseMonitor = nil
         peekScanStarted = false
@@ -484,6 +650,20 @@ final class MenuBarController {
     private static func topLeft(_ point: CGPoint) -> CGPoint {
         let height = NSScreen.screens.first?.frame.height ?? 0
         return CGPoint(x: point.x, y: height - point.y)
+    }
+
+    /// Each display's menu bar strip (top-left global, like AX frames), with 1 pt above and 2 pt below as slack,
+    /// for `isInMenuBarStrip`. The bar's height is the screen's top inset (covers notched displays), else
+    /// `NSStatusBar.system.thickness`. Reads NSScreen, so main actor only.
+    private static func menuBarStrips() -> [CGRect] {
+        NSScreen.screens.compactMap { screen in
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+            else { return nil }
+            let bounds = CGDisplayBounds(id)
+            let inset = screen.frame.maxY - screen.visibleFrame.maxY
+            let height = inset > 0 ? inset : NSStatusBar.system.thickness
+            return CGRect(x: bounds.minX, y: bounds.minY - 1, width: bounds.width, height: height + 3)
+        }
     }
 
     /// On-screen windows with their owner and bounds (top-left global). Thread-safe; needs no Screen Recording.

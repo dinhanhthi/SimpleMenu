@@ -6,7 +6,7 @@ import SwiftUI
 @Observable
 @MainActor
 final class Navigation {
-    var section: SettingsSection = .general
+    var section: SettingsSection = .layout
 }
 
 struct MainView: View {
