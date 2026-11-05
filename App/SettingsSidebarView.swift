@@ -10,7 +10,7 @@ typealias SettingsRoot = SettingsSidebarView
 
 /// A sidebar section. Adding one: a case, its row in `label`, its form in `SettingsSidebarView.content`.
 enum SettingsSection: CaseIterable, Identifiable {
-    case layout, general, permissions, about
+    case layout, general, permissions, ai, about
 
     var id: Self { self }
 
@@ -19,6 +19,7 @@ enum SettingsSection: CaseIterable, Identifiable {
         case .layout: ("Menu Bar Layout", "menubar.rectangle")
         case .general: ("General", "gearshape")
         case .permissions: ("Permissions", "hand.raised")
+        case .ai: ("AI", "sparkles")
         case .about: ("About", "info.circle")
         }
     }
@@ -136,6 +137,8 @@ struct SettingsSidebarView: View {
             }
         case .permissions:
             PermissionsSection()
+        case .ai:
+            AISection()
         case .about:
             AboutSection()
         }
@@ -206,7 +209,7 @@ private struct PermissionsSection: View {
                 } label: {
                     Text("Accessibility")
                     Text("SimpleMenu reads the menu bar items through Accessibility to list them and to open them. "
-                        + "It never needs Screen Recording.")
+                        + "Screen Recording is optional.")
                 }
                 LabeledContent("System Settings") {
                     HStack(spacing: 8) {
@@ -216,6 +219,9 @@ private struct PermissionsSection: View {
                     }
                     .buttonStyle(RowTextButtonStyle(formRow: true))
                 }
+            }
+            Section {
+                ScreenRecordingRow()
             }
             if let reason = menuBar?.hidingUnavailableReason {
                 Section {
@@ -229,6 +235,193 @@ private struct PermissionsSection: View {
                 }
             }
         }
+    }
+}
+
+/// The opt-in Screen Recording snapshots (`CaptureSnapshots`): a switch, the grant status and a note. Turning it on
+/// asks for access when it is not granted yet; the status is re-read when the app comes back from System Settings.
+private struct ScreenRecordingRow: View {
+    @Environment(MenuBarController.self) private var menuBar: MenuBarController?
+    @AppStorage(MenuBarCapture.settingKey) private var enabled = false
+    @State private var granted = MenuBarCapture.isGranted
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 10) {
+                Label(granted ? "Granted" : "Not granted",
+                      systemImage: granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(granted ? .green : .orange)
+                Toggle("Menu bar snapshots", isOn: isOn)
+                    .toggleStyle(CompactSwitch())
+                    .labelsHidden()
+            }
+        } label: {
+            Text("Menu bar snapshots")
+            Text("Optional: shows a last-seen image of each hidden item in the dropdown, which needs Screen "
+                + "Recording. macOS may ask again periodically, and a new grant may need a relaunch of SimpleMenu "
+                + "to take effect. Change it in System Settings > Privacy & Security > Screen & System Audio "
+                + "Recording.")
+        }
+        .onAppear(perform: sync)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in sync() }
+    }
+
+    /// Stores the choice; turning it on without a grant asks for one (the system prompt does not block), turning it
+    /// off drops the cached images.
+    private var isOn: Binding<Bool> {
+        Binding(get: { enabled }, set: { on in
+            enabled = on
+            if !on { menuBar?.capture.clear() }
+            if on && !MenuBarCapture.isGranted { MenuBarCapture.requestAccess() }
+            sync()
+        })
+    }
+
+    private func sync() {
+        granted = MenuBarCapture.isGranted
+    }
+}
+
+/// Opt-in on-device suggestions (`AISuggestions`): the switch, the model's availability, and one row per app the
+/// model would move, with an Accept button. Nothing applies on its own, and no model call is made while the switch
+/// is off or the model is unavailable.
+private struct AISection: View {
+    @Environment(MenuBarController.self) private var menuBar: MenuBarController?
+    @AppStorage(AppClassifier.settingKey) private var enabled = false
+    /// Not observable (the model's availability is read on demand): re-read on appear, on app activation and
+    /// before each run.
+    @State private var unavailableReason: String?
+    /// False until `run()` first read the availability, so no "Available" state shows before the check.
+    @State private var checked = false
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent {
+                    Toggle("Suggest with Apple Intelligence", isOn: $enabled)
+                        .toggleStyle(CompactSwitch())
+                        .labelsHidden()
+                } label: {
+                    Text("Suggest with Apple Intelligence")
+                    Text("The on-device model suggests which apps to hide: items that only show status go to "
+                        + "Hidden, items you click stay Visible. Nothing leaves this Mac, and nothing moves until "
+                        + "you accept it.")
+                }
+                if enabled && checked { availabilityRow }
+            }
+            if enabled, checked, unavailableReason == nil, let menuBar {
+                suggestionsSection(menuBar)
+            }
+        }
+        .onChange(of: enabled, initial: true) { run() }
+        // Apps arrive with the first scan: classify them once they are known.
+        .onChange(of: menuBar?.knownApps.count) { run() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            run()
+        }
+    }
+
+    @ViewBuilder
+    private var availabilityRow: some View {
+        if let reason = unavailableReason {
+            LabeledContent {
+                Label("Unavailable", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            } label: {
+                Text("Apple Intelligence")
+                Text(reason)
+            }
+        } else {
+            LabeledContent {
+                Label("Available", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } label: {
+                Text("Apple Intelligence")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func suggestionsSection(_ menuBar: MenuBarController) -> some View {
+        let classifier = menuBar.classifier
+        let pending = pendingSuggestions(menuBar)
+        Section("Suggestions") {
+            ForEach(pending, id: \.bundleID) { row in
+                LabeledContent {
+                    Button("Accept") {
+                        menuBar.setSection(row.suggestion.section, for: row.bundleID)
+                    }
+                    .buttonStyle(RowTextButtonStyle(formRow: true))
+                    .accessibilityLabel("Accept: move \(row.name) to \(row.suggestion.section.title)")
+                } label: {
+                    HStack(spacing: 8) {
+                        if let icon = row.icon {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .frame(width: 20, height: 20)
+                                .accessibilityHidden(true)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.name)
+                            Text("\(row.suggestion.section.title): \(row.suggestion.reason)")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            if classifier.isRunning {
+                LabeledContent {
+                    ProgressView().controlSize(.small)
+                } label: {
+                    Text("Asking the on-device model...")
+                }
+            } else if classifier.suggestions.isEmpty {
+                Text("No suggestions yet.")
+                    .foregroundStyle(.secondary)
+            } else if pending.isEmpty {
+                Text("No suggestions: every app is already where the model would put it.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// One suggestion row to show.
+    private struct PendingSuggestion {
+        let bundleID: String
+        let name: String
+        let icon: NSImage?
+        let suggestion: Suggestion
+    }
+
+    /// Suggestions whose app is not in the suggested section yet (a missing layout entry counts as visible),
+    /// sorted by app name. Always-hidden apps are the user's call and never get one.
+    private func pendingSuggestions(_ menuBar: MenuBarController) -> [PendingSuggestion] {
+        menuBar.classifier.suggestions
+            .filter { id, suggestion in
+                let current = menuBar.layout.sections[id] ?? .visible
+                return current != .alwaysHidden && current != suggestion.section
+            }
+            .map { id, suggestion in
+                let known = menuBar.knownApps[id]
+                return PendingSuggestion(bundleID: id, name: known?.name ?? id, icon: known?.icon,
+                                         suggestion: suggestion)
+            }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Classifies the apps not cached yet, only while the switch is on and the model is available. The model
+    /// runs off the main thread; `suggest` returns at once when a run is already in progress.
+    private func run() {
+        guard enabled else { return }
+        guard let menuBar else { return }
+        unavailableReason = menuBar.classifier.unavailableReason
+        checked = true
+        guard unavailableReason == nil else { return }
+        let inputs = AppClassifier.inputs(items: menuBar.items, knownApps: menuBar.knownApps)
+        guard !inputs.isEmpty else { return }
+        let classifier = menuBar.classifier
+        Task { await classifier.suggest(inputs) }
     }
 }
 

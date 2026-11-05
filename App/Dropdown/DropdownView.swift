@@ -2,14 +2,16 @@
 import AppKit
 import SwiftUI
 
-/// Reads the controller's cached `items`, `layout` and `knownApps` only (no AX), so it renders at once; a rescan
-/// updates the rows in place. Reports its height through `onHeight` so the panel can keep its top edge pinned.
+/// Reads the controller's cached `items`, `layout`, `knownApps` and snapshots only (no AX), so it renders at once; a
+/// rescan or a capture updates the rows in place. Reports its height through `onHeight` so the panel can keep its top edge pinned.
 struct DropdownView: View {
     let controller: MenuBarController
     /// Bundle ID and item index of a clicked row.
     let onOpen: (String, Int) -> Void
     let onSettings: () -> Void
     let onHeight: (CGFloat) -> Void
+    /// Snapshots show only while the `CaptureSnapshots` switch is on.
+    @AppStorage(MenuBarCapture.settingKey) private var captureEnabled = false
 
     /// The list scrolls past this height.
     private static let maxListHeight: CGFloat = 480
@@ -18,6 +20,7 @@ struct DropdownView: View {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let groups = [BarSection.hidden, .alwaysHidden].map { ($0, entries(in: $0, running: running)) }
             .filter { !$0.1.isEmpty }
+        let snapshots = captureEnabled ? controller.capture.snapshots : [:]
         VStack(alignment: .leading, spacing: 0) {
             if groups.isEmpty {
                 EmptyState()
@@ -25,7 +28,7 @@ struct DropdownView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(groups, id: \.0) { group in
-                            SectionGroup(title: group.0.title, apps: group.1, onOpen: onOpen)
+                            SectionGroup(title: group.0.title, apps: group.1, snapshots: snapshots, onOpen: onOpen)
                         }
                     }
                     .padding(6)
@@ -90,6 +93,7 @@ private struct AppEntry: Identifiable {
 private struct SectionGroup: View {
     let title: String
     let apps: [AppEntry]
+    let snapshots: [String: Snapshot]
     let onOpen: (String, Int) -> Void
 
     var body: some View {
@@ -100,38 +104,49 @@ private struct SectionGroup: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 2)
             ForEach(apps) { app in
-                AppRows(app: app, onOpen: onOpen)
+                AppRows(app: app, snapshots: snapshots, onOpen: onOpen)
             }
         }
     }
 }
 
 /// An app with at most one item is a single row (icon, name, item text); one with several is an app header over
-/// one row per item. An app with no cached items opens its first item.
+/// one row per item. An app with no cached items opens its first item. A row shows its item's snapshot when cached.
 private struct AppRows: View {
     let app: AppEntry
+    let snapshots: [String: Snapshot]
     let onOpen: (String, Int) -> Void
 
     var body: some View {
         if app.items.count <= 1 {
-            Button { onOpen(app.bundleID, app.items.first?.index ?? 0) } label: {
-                AppLabel(app: app, text: app.items.first.flatMap(Self.text))
+            let index = app.items.first?.index ?? 0
+            Button { onOpen(app.bundleID, index) } label: {
+                AppLabel(app: app, text: app.items.first.flatMap(Self.text), snapshot: snapshot(index))
             }
             .buttonStyle(DropdownRowStyle())
         } else {
-            AppLabel(app: app, text: nil)
+            AppLabel(app: app, text: nil, snapshot: nil)
                 .padding(.horizontal, DropdownRowStyle.padding)
                 .padding(.vertical, 4)
             ForEach(app.items, id: \.rowID) { item in
                 Button { onOpen(app.bundleID, item.index) } label: {
-                    Text(Self.text(item) ?? "Item \(item.index + 1)")
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, AppLabel.iconSize + AppLabel.spacing)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Self.text(item) ?? "Item \(item.index + 1)")
+                            .lineLimit(1)
+                        if let snapshot = snapshot(item.index) {
+                            SnapshotLine(snapshot: snapshot)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, AppLabel.iconSize + AppLabel.spacing)
                 }
                 .buttonStyle(DropdownRowStyle())
             }
         }
+    }
+
+    private func snapshot(_ index: Int) -> Snapshot? {
+        snapshots[MenuBarCapture.key(bundleID: app.bundleID, index: index)]
     }
 
     /// AXTitle, else AXDescription (or its fallbacks).
@@ -146,6 +161,7 @@ private struct AppLabel: View {
 
     let app: AppEntry
     let text: String?
+    let snapshot: Snapshot?
 
     var body: some View {
         HStack(spacing: Self.spacing) {
@@ -161,9 +177,46 @@ private struct AppLabel: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                if let snapshot {
+                    SnapshotLine(snapshot: snapshot)
+                }
             }
             Spacer(minLength: 0)
         }
+    }
+}
+
+/// A status item's last-seen image, at most its real size, and "seen N min ago".
+private struct SnapshotLine: View {
+    static let maxSize = CGSize(width: 160, height: 22)
+
+    let snapshot: Snapshot
+
+    var body: some View {
+        HStack(spacing: 6) {
+            let size = Self.fitted(snapshot.pointSize)
+            Image(decorative: snapshot.image, scale: 1)
+                .resizable()
+                .frame(width: size.width, height: size.height)
+            TimelineView(.everyMinute) { context in
+                Text(Self.age(snapshot.date, now: context.date))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    /// `size` scaled down (never up) to fit `maxSize`, keeping its aspect ratio.
+    private static func fitted(_ size: CGSize) -> CGSize {
+        guard size.width > 0, size.height > 0 else { return .zero }
+        let scale = min(1, maxSize.width / size.width, maxSize.height / size.height)
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
+    private static func age(_ date: Date, now: Date) -> String {
+        let minutes = Int(max(0, now.timeIntervalSince(date)) / 60)
+        return minutes == 0 ? "seen just now" : "seen \(minutes) min ago"
     }
 }
 

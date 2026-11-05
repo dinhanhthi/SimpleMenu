@@ -52,7 +52,7 @@ targets:
     scheme:
       testTargets:
         - SimpleMenuTests
-  # Hostless: Layout.swift is compiled in directly, so `xcodebuild test` never launches SimpleMenu
+  # Hostless: Layout.swift and PromptSanitizer.swift are compiled in directly, so `xcodebuild test` never launches SimpleMenu
   # or restricts the real menu bar. No TEST_HOST and no dependency on the app (XcodeGen would infer a host).
   "SimpleMenuTests":
     type: bundle.unit-test
@@ -60,6 +60,7 @@ targets:
     sources:
       - path: Tests/SimpleMenuTests
       - path: App/Engine/Layout.swift
+      - path: App/AI/PromptSanitizer.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "com.math2it.simplemenu.tests"

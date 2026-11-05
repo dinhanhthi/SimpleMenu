@@ -10,6 +10,8 @@ import os
 /// - `setSection <bundleID> <visible|hidden|alwaysHidden>`
 /// - `open <bundleID> <index>`: same as a dropdown row click on that item
 /// - `dropdown`: same as an Option-click on SimpleMenu, so it toggles (a second `dropdown` closes it)
+/// - `classify`: runs the Foundation Models classifier over the known apps and logs each suggestion, or why the
+///   model is unavailable
 @MainActor
 final class DebugCommands: NSObject {
     static let notificationName = Notification.Name("com.math2it.simplemenu.debug")
@@ -54,12 +56,44 @@ final class DebugCommands: NSObject {
                 return
             }
             controller.open(bundleID: words[1], index: index)
+        case "classify":
+            classify()
         default:
             Self.logger.notice("unknown cmd=\"\(cmd, privacy: .public)\"")
             return
         }
         let mode = String(describing: controller.mode)
         Self.logger.notice("done cmd=\"\(cmd, privacy: .public)\" mode=\(mode, privacy: .public)")
+    }
+
+    /// Logs one line per known app once the run ends (cached apps are not asked again).
+    private func classify() {
+        let classifier = controller.classifier
+        if let reason = classifier.unavailableReason {
+            Self.logger.notice("classify: unavailable: \(reason, privacy: .public)")
+            return
+        }
+        guard !classifier.isRunning else {
+            Self.logger.notice("classify: already running")
+            return
+        }
+        let apps = AppClassifier.inputs(items: controller.items, knownApps: controller.knownApps)
+        Task {
+            await classifier.suggest(apps, ignoreSetting: true)
+            for app in apps {
+                guard let suggestion = classifier.suggestions[app.bundleID] else {
+                    Self.logger.notice("classify: \(app.bundleID, privacy: .public) no suggestion")
+                    continue
+                }
+                let kind = String(describing: suggestion.kind)
+                Self.logger.notice("""
+                    classify: \(app.bundleID, privacy: .public) kind=\(kind, privacy: .public) \
+                    section=\(suggestion.section.rawValue, privacy: .public) \
+                    reason="\(suggestion.reason, privacy: .public)"
+                    """)
+            }
+            Self.logger.notice("classify: done, \(apps.count, privacy: .public) apps")
+        }
     }
 }
 #endif

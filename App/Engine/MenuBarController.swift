@@ -64,6 +64,10 @@ final class MenuBarController {
     private(set) var knownApps: [String: KnownApp] = [:]
     /// Why hiding is off (private API unavailable or failing), or nil. While set, the bar stays fully expanded.
     private(set) var hidingUnavailableReason: String?
+    /// Opt-in snapshots of Hidden items (at peek) and opened items, for the dropdown.
+    @ObservationIgnored let capture = MenuBarCapture()
+    /// Opt-in on-device suggestions for the layout. Never run by the engine itself.
+    @ObservationIgnored let classifier = AppClassifier()
 
     @ObservationIgnored private let restriction = SMRestriction()
     @ObservationIgnored private let store = LayoutStore()
@@ -226,6 +230,7 @@ final class MenuBarController {
                 self.collapse()
                 return
             }
+            self.captureSnapshots([item])
             let fresh = ContinuousClock.now - start
             let baseline = await Task.detached { Set(Self.onScreenWindows().map(\.id)) }.value
             guard !Task.isCancelled, self.mode == .open(bundleID) else { return }
@@ -467,6 +472,10 @@ final class MenuBarController {
         #endif
         if mode == .peek, peekScanStarted, !peekFramesReady {
             peekFramesReady = true
+            // Always-hidden apps stay restricted in a peek, so they are captured only when opened.
+            captureSnapshots(items.filter {
+                layout.sections[$0.bundleID] == .hidden && !staleBundleIDs.contains($0.bundleID)
+            })
             if let click = pendingPeekClick {
                 pendingPeekClick = nil
                 peekClick(at: click.point, baseline: click.baseline)
@@ -519,6 +528,26 @@ final class MenuBarController {
                             icon: workspace.icon(forFile: url.path))
         }
         return KnownApp(bundleID: bundleID, name: bundleID, icon: workspace.icon(for: .applicationBundle))
+    }
+
+    // MARK: - Snapshots
+
+    /// Opt-in (`CaptureSnapshots`, default off, read on every call): captures those of `items` that are allowed now
+    /// and in a menu bar strip, in the background. `items` must have fresh frames. Never awaited, so it never delays
+    /// a click.
+    private func captureSnapshots(_ items: [MenuBarItem]) {
+        guard UserDefaults.standard.bool(forKey: MenuBarCapture.settingKey) else {
+            #if DEBUG
+            Self.logger.notice("capture: skipped, \(MenuBarCapture.settingKey, privacy: .public) is off")
+            #endif
+            return
+        }
+        let strips = Self.menuBarStrips()
+        let laidOut = items.filter { item in
+            !isRestricted(item.bundleID) && isInMenuBarStrip(item.frame, strips: strips)
+        }
+        guard !laidOut.isEmpty else { return }
+        Task { await capture.capture(laidOut) }
     }
 
     // MARK: - Peek and open
