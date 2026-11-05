@@ -202,6 +202,7 @@ private struct BarCard: View {
     let onSize: (CGSize) -> Void
 
     @State private var contentWidth: CGFloat = 0
+    @State private var hintWidth: CGFloat = 0
     @State private var height: CGFloat = 0
 
     var body: some View {
@@ -215,23 +216,33 @@ private struct BarCard: View {
                     .fixedSize()
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { report(width: $0) }
             } else {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 2) {
-                        ForEach(groups, id: \.0) { group in
-                            if group.0 != groups.first?.0 {
-                                Divider()
-                                    .frame(height: AppLabel.iconSize)
-                                    .padding(.horizontal, 4)
-                            }
-                            ForEach(group.1) { app in
-                                BarAppIcons(app: app, onOpen: onOpen)
+                VStack(alignment: .leading, spacing: 0) {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 2) {
+                            ForEach(groups, id: \.0) { group in
+                                if group.0 != groups.first?.0 {
+                                    Divider()
+                                        .frame(height: AppLabel.iconSize)
+                                        .padding(.horizontal, 4)
+                                }
+                                ForEach(group.1) { app in
+                                    BarAppIcons(app: app, onOpen: onOpen)
+                                }
                             }
                         }
+                        .padding(6)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { report(width: $0) }
                     }
-                    .padding(6)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { report(width: $0) }
+                    .scrollBounceBehavior(.basedOnSize)
+                    // The icons show no live value (hidden items are not drawn): say where to see it.
+                    Text("Click an icon to see its live status in the menu bar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 7)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { report(hintWidth: $0) }
                 }
-                .scrollBounceBehavior(.basedOnSize)
             }
         }
         .modifier(GlassCard(cornerRadius: 12))
@@ -240,10 +251,13 @@ private struct BarCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func report(width: CGFloat? = nil, height: CGFloat? = nil) {
+    /// The panel's size: the wider of the icon row and the hint (a short row would clip the hint), and the card's
+    /// height.
+    private func report(width: CGFloat? = nil, hintWidth: CGFloat? = nil, height: CGFloat? = nil) {
         if let width { contentWidth = width }
+        if let hintWidth { self.hintWidth = hintWidth }
         if let height { self.height = height }
-        onSize(CGSize(width: contentWidth, height: self.height))
+        onSize(CGSize(width: max(contentWidth, self.hintWidth), height: self.height))
     }
 }
 

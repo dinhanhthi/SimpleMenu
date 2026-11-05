@@ -10,14 +10,14 @@ typealias SettingsRoot = SettingsSidebarView
 
 /// A sidebar section. Adding one: a case, its row in `label`, its form in `SettingsSidebarView.content`.
 enum SettingsSection: CaseIterable, Identifiable {
-    case layout, general, permissions, ai, about
+    case general, layout, permissions, ai, about
 
     var id: Self { self }
 
     var label: (title: String, icon: String) {
         switch self {
-        case .layout: ("Layout", "menubar.rectangle")
         case .general: ("General", "gearshape")
+        case .layout: ("Layout", "menubar.rectangle")
         case .permissions: ("Permissions", "hand.raised")
         case .ai: ("AI", "sparkles")
         case .about: ("About", "info.circle")
